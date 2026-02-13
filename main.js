@@ -1,5 +1,8 @@
 (() => {
   const XP_CHOP = 25;
+  const XP_MINE = 22;
+  const MINE_TIME_MS = 1000;
+  const ROCK_RESPAWN_MS = 6500;
   const XP_FISH = 20;
   const CHOP_TIME_MS = 900;
   const FISH_TIME_MS = 1100;
@@ -17,8 +20,8 @@
   const INVENTORY_CAPACITY = 20;
   const BANK_VIEW_SLOTS = 30;
 
-  const SAVE_KEY = "iso_rpg_village_save_v8";
-  const USERNAME_KEY = "iso_rpg_username_v1";
+  const SAVE_KEY = "logger_save_0_0_1";
+  const USERNAME_KEY = "logger_username_v1";
 
   // Username
   function getUsername() {
@@ -35,26 +38,28 @@
 
   // Items
   const ITEM_DEFS = {
-    log:  { name: "Logs", icon: "🪵" },
-    fish: { name: "Raw Fish", icon: "🐟" },
-    axe:  { name: "Bronze Axe", icon: "🪓" },
-    rod:  { name: "Fishing Rod", icon: "🎣" },
+    log:   { name: "Logs", icon: "🪵", stackable: true },
+    fish:  { name: "Raw Fish", icon: "🐟", stackable: true },
+    ore_copper: { name: "Copper Ore", icon: "🟠", stackable: true },
+    ore_tin:    { name: "Tin Ore", icon: "⚪️", stackable: true },
+    ore_iron:   { name: "Iron Ore", icon: "🔩", stackable: true },
+    axe:   { name: "Bronze Axe", icon: "🪓", stackable: false },
+    rod:   { name: "Fishing Rod", icon: "🎣", stackable: false },
+    pick:  { name: "Bronze Pickaxe", icon: "⛏️", stackable: false },
   };
 
   const SHOP_STOCK = [
     { itemId: "axe", price: 10, desc: "Required to chop trees." },
     { itemId: "rod", price: 12, desc: "Required to fish at spots." },
+    { itemId: "pick", price: 11, desc: "Required to mine rocks." },
   ];
 
   const BUY_PRICES = { log: 2, fish: 3 };
 
   // Skills
-  const SKILL_ORDER = [
-    "Attack","Strength","Defence","Ranged","Prayer","Magic",
-    "Runecraft","Construction","Dungeoneering","Hitpoints",
-    "Agility","Herblore","Thieving","Crafting","Fletching","Slayer",
-    "Hunter","Mining","Smithing","Fishing","Cooking","Firemaking",
-    "Woodcutting","Farming"
+    const SKILL_ORDER = [
+    "Attack","Defence","Ranged","Magic","Construction","Constitution",
+    "Crafting","Mining","Smithing","Fishing","Cooking","Woodcutting","Farming"
   ];
 
   function xpForLevel(lvl) {
@@ -71,7 +76,7 @@
 
   // Save / Load
   function defaultState() {
-    const skills = { woodcutting: { lvl: 1, xp: 0 }, fishing: { lvl: 1, xp: 0 } };
+    const skills = { woodcutting: { lvl: 1, xp: 0 }, fishing: { lvl: 1, xp: 0 }, constitution: { lvl: 1, xp: 0 } };
     ensureAllSkills(skills);
     return {
       map: "spawn_inn",
@@ -81,8 +86,10 @@
       action: null, // { kind, endAt, targetId }
       pendingDoor: null,
       pendingNpc: null,
-      inv: { items: [], coins: 25 },
-      bank: { items: [] },
+      inv: { items: [], coins: 25 },  // items = stack list: [{id, qty}]
+
+      bank: { items: [] }, // items = stack list: [{id, qty}]
+
       skills,
       world: {
         trees: [
@@ -119,15 +126,19 @@
       s.inv.coins ??= 0;
       s.bank ??= { items: [] };
       s.bank.items ??= [];
-      s.skills ??= { woodcutting: { lvl: 1, xp: 0 }, fishing: { lvl: 1, xp: 0 } };
+      s.skills ??= { woodcutting: { lvl: 1, xp: 0 }, fishing: { lvl: 1, xp: 0 }, constitution: { lvl: 1, xp: 0 } };
       ensureAllSkills(s.skills);
       s.world ??= { trees: [], fishingSpots: [] };
       s.world.trees ??= [];
+      s.world.rocks ??= [];
       s.world.fishingSpots ??= [];
+      s.world.rocks ??= [];
       s.ui ??= { activeTab: null, selectedSkill: "woodcutting", modal: null, modalNpcId: null };
       s.ui.activeTab ??= null;
       s.ui.selectedSkill ??= "woodcutting";
       s.ui.modal ??= null;
+      s.inv.items = normalizeStacks(s.inv.items);
+      s.bank.items = normalizeStacks(s.bank.items);
       s.ui.modalNpcId ??= null;
       return s;
     } catch {
@@ -139,40 +150,124 @@
   function saveState() { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); }
   setInterval(saveState, 5000);
 
-  // Inventory / Bank helpers
-  const invUsed = () => state.inv.items.length;
-  const invFree = () => INVENTORY_CAPACITY - invUsed();
-  const hasItem = (id) => state.inv.items.includes(id);
-  const addItemToInv = (id) => {
-    if (!ITEM_DEFS[id]) return false;
-    if (invUsed() >= INVENTORY_CAPACITY) return false;
-    state.inv.items.push(id);
-    return true;
-  };
-  const removeOneFromInv = (id) => {
-    const i = state.inv.items.indexOf(id);
-    if (i < 0) return false;
-    state.inv.items.splice(i, 1);
-    return true;
-  };
-  const addCoins = (n) => (state.inv.coins += n);
-  const spendCoins = (n) => {
-    if (state.inv.coins < n) return false;
-    state.inv.coins -= n;
-    return true;
-  };
+  // Inventory / Bank helpers (STACKS)
+// inv.items and bank.items store stacks: { id: string, qty: number }
+// - Resources stack (logs, fish, etc.)
+// - Tools do NOT stack (each tool consumes a slot)
 
-  const addItemToBank = (id) => state.bank.items.push(id);
-  const removeOneFromBank = (id) => {
-    const i = state.bank.items.indexOf(id);
-    if (i < 0) return false;
-    state.bank.items.splice(i, 1);
-    return true;
-  };
+function normalizeStacks(list) {
+  // Accept legacy formats and normalize to [{id, qty}]
+  if (!Array.isArray(list)) return [];
+  if (list.length === 0) return [];
+  if (typeof list[0] === "string") {
+    // legacy array of itemIds
+    const out = [];
+    for (const id of list) {
+      const def = ITEM_DEFS[id];
+      if (!def) continue;
+      if (def.stackable) {
+        const s = out.find(x => x.id === id);
+        if (s) s.qty += 1;
+        else out.push({ id, qty: 1 });
+      } else {
+        out.push({ id, qty: 1 });
+      }
+    }
+    return out;
+  }
+  // already stacks
+  return list
+    .filter(x => x && typeof x.id === "string" && typeof x.qty === "number")
+    .map(x => ({ id: x.id, qty: Math.max(1, Math.floor(x.qty)) }));
+}
 
-  // UI elements
+function stacksUsed(list) { return list.length; }
+
+const invUsed = () => stacksUsed(state.inv.items);
+const invFree = () => INVENTORY_CAPACITY - invUsed();
+
+function findStack(list, id) { return list.find(s => s.id === id) || null; }
+
+const hasItem = (id) => {
+  const def = ITEM_DEFS[id];
+  if (!def) return false;
+  const s = findStack(state.inv.items, id);
+  return !!s && s.qty > 0;
+};
+
+function addItemToList(list, id, qty=1) {
+  const def = ITEM_DEFS[id];
+  if (!def) return false;
+  qty = Math.max(1, Math.floor(qty));
+  if (def.stackable) {
+    const s = findStack(list, id);
+    if (s) { s.qty += qty; return true; }
+    // new stack needs a slot
+    list.push({ id, qty });
+    return true;
+  } else {
+    // each qty is a new slot
+    for (let i=0; i<qty; i++) list.push({ id, qty: 1 });
+    return true;
+  }
+}
+
+function removeItemFromList(list, id, qty=1) {
+  const def = ITEM_DEFS[id];
+  if (!def) return false;
+  qty = Math.max(1, Math.floor(qty));
+  if (def.stackable) {
+    const s = findStack(list, id);
+    if (!s || s.qty < qty) return false;
+    s.qty -= qty;
+    if (s.qty <= 0) {
+      const idx = list.indexOf(s);
+      if (idx >= 0) list.splice(idx, 1);
+    }
+    return true;
+  } else {
+    // remove qty separate tool entries
+    let removed = 0;
+    for (let i=list.length-1; i>=0 && removed<qty; i--) {
+      if (list[i].id === id) { list.splice(i,1); removed++; }
+    }
+    return removed === qty;
+  }
+}
+
+function addItemToInv(id, qty=1) {
+  const def = ITEM_DEFS[id];
+  if (!def) return false;
+  // Capacity check: stackable needs 1 slot if new stack; non-stack needs qty slots
+  if (def.stackable) {
+    const exists = !!findStack(state.inv.items, id);
+    if (!exists && invFree() <= 0) return false;
+    return addItemToList(state.inv.items, id, qty);
+  } else {
+    if (invFree() < qty) return false;
+    return addItemToList(state.inv.items, id, qty);
+  }
+}
+
+function removeOneFromInv(id) { return removeItemFromList(state.inv.items, id, 1); }
+
+const addCoins = (n) => (state.inv.coins += n);
+const spendCoins = (n) => {
+  if (state.inv.coins < n) return false;
+  state.inv.coins -= n;
+  return true;
+};
+
+// Bank
+function bankUsed() { return stacksUsed(state.bank.items); }
+function addItemToBank(id, qty=1) { return addItemToList(state.bank.items, id, qty); }
+function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id, 1); }
+
+// UI elements
   const btnSkills = document.getElementById("btnSkills");
   const btnInv = document.getElementById("btnInv");
+  const btnZoomIn = document.getElementById("btnZoomIn");
+  const btnZoomOut = document.getElementById("btnZoomOut");
   const panelSkills = document.getElementById("panelSkills");
   const panelInv = document.getElementById("panelInv");
   const skillsListEl = document.getElementById("skillsList");
@@ -216,8 +311,10 @@
   }
   btnSkills.addEventListener("click", () => setTab("skills"));
   btnInv.addEventListener("click", () => setTab("inv"));
+  if (btnZoomIn) btnZoomIn.addEventListener("click", () => { camZoom *= 1.12; applyZoom(); });
+  if (btnZoomOut) btnZoomOut.addEventListener("click", () => { camZoom /= 1.12; applyZoom(); });
 
-  const skillDisplayName = (k) => (k === "hitpoints" ? "Hitpoints" : k.charAt(0).toUpperCase()+k.slice(1));
+  const skillDisplayName = (k) => (k === "constitution" ? "Constitution" : (k.charAt(0).toUpperCase()+k.slice(1)));
   const iconForSkill = (k) => (k==="woodcutting"?"🪓":k==="fishing"?"🎣":k==="mining"?"⛏️":k==="cooking"?"🍳":k==="magic"?"✨":"★");
 
   function renderSkillsList() {
@@ -254,18 +351,38 @@
     skillBarFillEl.style.width = (sk.lvl>=99?100:pct*100)+"%";
   }
 
-  function renderInventoryGrid(gridEl, items, capacity, onClick=null) {
+  function renderInventoryGrid(gridEl, stacks, capacity, onClick=null) {
     gridEl.innerHTML = "";
-    const slots = [...items];
+    const slots = [...stacks];
     while (slots.length < capacity) slots.push(null);
-    for (const it of slots.slice(0, capacity)) {
-      const wrap = document.createElement("div"); wrap.className="invSlotWrap";
-      const slot = document.createElement("div"); slot.className="invSlot"+(it?"":" empty");
-      slot.textContent = it ? (ITEM_DEFS[it]?.icon || "❓") : "·";
-      if (it && onClick) {
-        slot.style.cursor="pointer";
-        slot.addEventListener("click", () => onClick(it));
+
+    for (const st of slots.slice(0, capacity)) {
+      const wrap = document.createElement("div"); 
+      wrap.className = "invSlotWrap";
+
+      const slot = document.createElement("div"); 
+      slot.className = "invSlot" + (st ? "" : " empty");
+
+      if (!st) {
+        slot.textContent = "·";
+      } else {
+        const def = ITEM_DEFS[st.id];
+        slot.textContent = def?.icon || "❓";
+
+        // qty badge for stacks with qty > 1 OR stackable resources
+        if ((def?.stackable && st.qty >= 1) || st.qty > 1) {
+          const badge = document.createElement("div");
+          badge.className = "qtyBadge";
+          badge.textContent = String(st.qty);
+          wrap.appendChild(badge);
+        }
+
+        if (onClick) {
+          slot.style.cursor = "pointer";
+          slot.addEventListener("click", () => onClick(st.id));
+        }
       }
+
       wrap.appendChild(slot);
       gridEl.appendChild(wrap);
     }
@@ -339,7 +456,8 @@
     sellListEl.innerHTML = "";
     const def = ITEM_DEFS[buysId];
     const price = BUY_PRICES[buysId] ?? 0;
-    const count = state.inv.items.filter(x=>x===buysId).length;
+    const st = state.inv.items.find(s=>s.id===buysId);
+    const count = st ? st.qty : 0;
     sellInfoEl.textContent = `${def.icon} ${def.name} — ${price} coins each — You have ${count}`;
 
     const row = document.createElement("div"); row.className="shopItem";
@@ -362,9 +480,10 @@
     sellListEl.appendChild(row);
 
     btnSellAll.onclick = () => {
-      const n = state.inv.items.filter(x=>x===buysId).length;
+      const st2 = state.inv.items.find(s=>s.id===buysId);
+      const n = st2 ? st2.qty : 0;
       if (n <= 0) return setMsg("Nothing to sell");
-      state.inv.items = state.inv.items.filter(x=>x!==buysId);
+      removeItemFromList(state.inv.items, buysId, n);
       addCoins(n*price);
       setMsg(`Sold ${n} ${def.name}`);
       renderModal(); renderInvPanel(); updateHUD(); saveState();
@@ -475,6 +594,10 @@
     for(let x=6; x<=18; x++) setRoad(x,12);
     for(let z=7; z<=18; z++) setRoad(12,z);
     for(let x=18; x<m.w-1; x++) setRoad(x,12);
+    // Ensure NPC stand tiles are land
+    m.tileType[11][11]=0; m.heightMap[11][11]=1;
+    m.tileType[16][7]=0; m.heightMap[16][7]=1;
+    m.tileType[15][19]=0; m.heightMap[15][19]=1;
 
     m.structures=[]; m.doors=[];
     function addHouse(id,x0,z0,w,d,doorTx,doorTz,interiorId){
@@ -490,21 +613,10 @@
     m.bushes=[{tx:9,tz:10},{tx:15,tz:10},{tx:10,tz:16},{tx:14,tz:16},{tx:6,tz:13},{tx:18,tz:13}];
 
     m.npcs=[
-      { id:"npc_shop", kind:"shop", name:"Tool Trader", tx:12, tz:11, icon:"🧰" },
+      { id:"npc_shop", kind:"shop", name:"Tool Trader", tx:11, tz:11, icon:"🧰" },
       { id:"npc_logbuyer", kind:"buyer_logs", name:"Lumber Buyer", tx:7, tz:16, icon:"🪵" },
-      { id:"npc_fishbuyer", kind:"buyer_fish", name:"Fishmonger", tx:23, tz:14, icon:"🐟" },
+      { id:"npc_fishbuyer", kind:"buyer_fish", name:"Fishmonger", tx:19, tz:15, icon:"🐟" },
     ];
-  }
-  genOverworld();
-
-  const interiors = {};
-  function genInterior(id, title) {
-    const m = makeMap(IN_W, IN_H);
-    for(let z=0; z<m.h; z++) for(let x=0; x<m.w; x++){ m.tileType[z][x]=4; m.heightMap[z][x]=0; }
-    for(let x=0; x<m.w; x++){ m.tileType[0][x]=1; m.tileType[m.h-1][x]=1; }
-    for(let z=0; z<m.h; z++){ m.tileType[z][0]=1; m.tileType[z][m.w-1]=1; }
-
-    m.structures=[{ id:id+"_table", x0:3, z0:3, w:2, d:1, doorTx:-999, doorTz:-999 }];
     const doorTx=Math.floor(m.w/2), doorTz=m.h-2;
     m.doors=[{ id:"exit_"+id, kind:"exit", tx:doorTx, tz:doorTz, fromMap:id, toMap:"overworld", returnTx:null, returnTz:null }];
 
@@ -530,6 +642,8 @@
   // Solids
   const treeAlive = (t, now=performance.now()) => now >= t.respawnAt;
   const stumpAlive = (t, now=performance.now()) => now < t.stumpUntil;
+  const rockAlive = (r, now=performance.now()) => now >= r.respawnAt;
+  const stubAlive = (r, now=performance.now()) => now < r.stubUntil;
 
   function isStructureSolid(m, tx, tz) {
     for (const s of m.structures) {
@@ -555,6 +669,9 @@
       for (const tr of state.world.trees) {
         if (tr.tx===tx && tr.tz===tz && (treeAlive(tr) || stumpAlive(tr))) return true;
       }
+      for (const rk of (state.world.rocks||[])) {
+        if (rk.tx===tx && rk.tz===tz && (rockAlive(rk) || stubAlive(rk))) return true;
+      }
     }
     return false;
   }
@@ -578,10 +695,16 @@
   const ISO_PITCH = Math.atan(Math.sqrt(1/2));
   const cam = new THREE.OrthographicCamera(-10,10,10,-10,0.1,800);
 
+    let camZoom = 1.06; // higher = closer
+  function applyZoom() {
+    camZoom = Math.max(0.6, Math.min(2.2, camZoom));
+    resize();
+  }
+
   function resize(){
     const w=window.innerWidth,h=window.innerHeight;
     renderer.setSize(w,h,false);
-    const aspect=w/h, zoom=1.06, viewSize=13;
+    const aspect=w/h, zoom=camZoom, viewSize=13;
     cam.left=-viewSize*aspect/zoom; cam.right=viewSize*aspect/zoom;
     cam.top=viewSize/zoom; cam.bottom=-viewSize/zoom;
     cam.updateProjectionMatrix();
@@ -621,9 +744,11 @@
   let pickables = [];
   let doorPickables = [];
   let treePickables = [];
+  let rockPickables = [];
   let npcPickables = [];
   let fishPickables = [];
   let stumpMeshes = new Map();
+  let rockStubMeshes = new Map();
 
   // Marker
   const marker = new THREE.Mesh(new THREE.RingGeometry(0.14,0.26,28), new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:0.7, side:THREE.DoubleSide }));
@@ -726,6 +851,18 @@
     }
   }
 
+  function makeRockMesh(kind='copper') {
+    const g = new THREE.Group();
+    const color = kind==='iron' ? 0x6c7a87 : kind==='tin' ? 0xc9d1d9 : 0xd9893d;
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 1, metalness: 0 });
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.34, 0), mat);
+    rock.position.y = 0.22;
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.32,0.36,0.08,18), new THREE.MeshStandardMaterial({ color:0x2a3647, roughness:1, metalness:0 }));
+    base.position.y = 0.04;
+    g.add(base, rock);
+    return g;
+  }
+
   function makeTreeMesh() {
     const g = new THREE.Group();
     const foliageMat = new THREE.MeshStandardMaterial({ color:0x2f8a3a, roughness:1, metalness:0 });
@@ -806,7 +943,7 @@
 
   function rebuildWorld() {
     clearGroup(tileGroup); clearGroup(decoGroup); clearGroup(structureGroup); clearGroup(resourceGroup); clearGroup(npcGroup);
-    pickables=[]; doorPickables=[]; treePickables=[]; npcPickables=[]; fishPickables=[]; stumpMeshes=new Map();
+    pickables=[]; doorPickables=[]; treePickables=[]; rockPickables=[]; npcPickables=[]; fishPickables=[]; stumpMeshes=new Map(); rockStubMeshes=new Map();
 
     const m = getMap();
 
@@ -911,6 +1048,20 @@
       }
       syncTreesAndStumps();
 
+      // Rocks / stubs
+      for (const rk of (state.world.rocks||[])) {
+        const rock = makeRockMesh(rk.kind);
+        rock.userData = { kind:"rock", rockId: rk.id, tx: rk.tx, tz: rk.tz };
+        resourceGroup.add(rock);
+        rockPickables.push(rock);
+
+        const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.26,0.30,0.18,16), new THREE.MeshStandardMaterial({ color:0x3a3f46, roughness:1, metalness:0 }));
+        stub.userData = { kind:"rockstub", rockId: rk.id };
+        resourceGroup.add(stub);
+        rockStubMeshes.set(rk.id, stub);
+      }
+      syncRocksAndStubs();
+
       for (const sp of (state.world.fishingSpots||[])) {
         const mesh = makeFishingSpotMesh(sp);
         const wp = tileToWorld(overworld, sp.tx, sp.tz);
@@ -935,6 +1086,27 @@
 
   if (state.map !== "overworld" && !interiors[state.map]) state.map = "spawn_inn";
   rebuildWorld();
+
+  function syncRocksAndStubs() {
+    if (state.map!=="overworld") return;
+    const m=overworld;
+    const now=performance.now();
+    for (const rockObj of rockPickables) {
+      const rk=(state.world.rocks||[]).find(r=>r.id===rockObj.userData.rockId);
+      if(!rk) continue;
+      const alive=rockAlive(rk,now);
+      const stubOn=stubAlive(rk,now);
+      const pos=tileToWorld(m,rk.tx,rk.tz);
+      const y=tileY(m,rk.tx,rk.tz);
+      rockObj.visible=alive;
+      rockObj.position.set(pos.x,y,pos.z);
+      const stub=rockStubMeshes.get(rk.id);
+      if(stub){
+        stub.visible = (!alive) && stubOn;
+        stub.position.set(pos.x, y+0.08, pos.z);
+      }
+    }
+  }
 
   function syncTreesAndStumps() {
     if (state.map!=="overworld") return;
@@ -977,6 +1149,7 @@
       while (cur && cur!==scene) {
         if (cur.userData?.kind==="door") return { kind:"door", tx:cur.userData.tx, tz:cur.userData.tz };
         if (cur.userData?.kind==="tree") return { kind:"tree", treeId:cur.userData.treeId, tx:cur.userData.tx, tz:cur.userData.tz };
+        if (cur.userData?.kind==="rock") return { kind:"rock", rockId:cur.userData.rockId, tx:cur.userData.tx, tz:cur.userData.tz };
         if (cur.userData?.kind==="npc") return { kind:"npc", npcId:cur.userData.npcId, tx:cur.userData.tx, tz:cur.userData.tz };
         if (cur.userData?.kind==="fishspot") return { kind:"fishspot", spotId:cur.userData.spotId, tx:cur.userData.tx, tz:cur.userData.tz };
         cur=cur.parent;
@@ -1122,9 +1295,23 @@
       state.action = { kind:"fish", endAt: performance.now()+FISH_TIME_MS, targetId: ctx.spot.id };
       return setMsg("Fishing...");
     }
+    if(ctx.type==="rock"){
+      if(!hasItem("pick")) return setMsg("You need a Pickaxe");
+      state.path=[]; state.moveSeg=null;
+      state.action = { kind:"mine", endAt: performance.now()+MINE_TIME_MS, targetId: ctx.rock.id };
+      return setMsg("Mining...");
+    }
   }
 
   // Pointer down
+  renderer.domElement.addEventListener("wheel", (ev) => {
+    // Zoom with trackpad/mouse wheel
+    ev.preventDefault();
+    const delta = Math.sign(ev.deltaY);
+    if (delta > 0) camZoom /= 1.08; else camZoom *= 1.08;
+    applyZoom();
+  }, { passive: false });
+
   renderer.domElement.addEventListener("pointerdown", (ev) => {
     if (state.action) return setMsg("Busy...");
     if (state.ui.modal) return; // don't click world through modal
@@ -1160,6 +1347,15 @@
       return setMsg("Walk to fishing spot");
     }
 
+    if(hit.kind==="rock" && state.map==="overworld"){
+      const rk=(state.world.rocks||[]).find(r=>r.id===hit.rockId);
+      if(!rk || !rockAlive(rk)) return setMsg("No rock");
+      const stand=bestAdjacent(m, rk.tx, rk.tz);
+      if(!stand) return setMsg("Can't reach rock");
+      setMoveGoal(stand.tx, stand.tz);
+      return setMsg("Walk to rock");
+    }
+
     if(hit.kind==="tree" && state.map==="overworld"){
       const tr=state.world.trees.find(t=>t.id===hit.treeId);
       if(!tr || !treeAlive(tr)) return setMsg("No tree");
@@ -1180,6 +1376,8 @@
     const k=e.key.toLowerCase();
     if(k==="e") doInteract();
     if(k==="escape") closeModal();
+    if(k==="+" || k==="="){ camZoom *= 1.12; applyZoom(); }
+    if(k==="-" || k==="_"){ camZoom /= 1.12; applyZoom(); }
     if(k==="r"){
       localStorage.removeItem(SAVE_KEY);
       state=defaultState();
@@ -1211,6 +1409,25 @@
 
     tr.respawnAt = now + TREE_RESPAWN_MS;
     tr.stumpUntil = tr.respawnAt;
+
+    saveState(); updateHUD();
+  }
+
+  function finishMine() {
+    const now=performance.now();
+    const rk=(state.world.rocks||[]).find(r=>r.id===state.action.targetId);
+    state.action=null;
+    if(!rk) return;
+
+    const itemId = rk.kind === "iron" ? "ore_iron" : rk.kind === "tin" ? "ore_tin" : "ore_copper";
+    const added = addItemToInv(itemId);
+    setMsg(added ? `You mine ${ITEM_DEFS[itemId].name}` : "Inventory full (ore dropped)");
+    addXp("mining", XP_MINE);
+    spawnXpPopup(XP_MINE, "⛏️");
+    if (Math.random() < 0.25) addCoins(1);
+
+    rk.respawnAt = now + ROCK_RESPAWN_MS;
+    rk.stubUntil = rk.respawnAt;
 
     saveState(); updateHUD();
   }
@@ -1314,10 +1531,10 @@
   const baseBodyY=body.position.y;
   function animateAction(now) {
     if(!state.action){ body.position.y=baseBodyY; return; }
-    const total = state.action.kind==="fish" ? FISH_TIME_MS : CHOP_TIME_MS;
+    const total = state.action.kind==="fish" ? FISH_TIME_MS : (state.action.kind==="mine" ? MINE_TIME_MS : CHOP_TIME_MS);
     const s = Math.max(0, Math.min(1, 1 - (state.action.endAt - now)/total));
     body.position.y = baseBodyY + Math.sin(s*Math.PI*4)*0.03;
-    player.rotation.y += (state.action.kind==="fish")?0.04:0.06;
+    player.rotation.y += (state.action.kind==="fish")?0.04:(state.action.kind==="mine"?0.05:0.06);
   }
 
   function updateCamera() {
@@ -1339,12 +1556,13 @@
 
     if(state.action && now>=state.action.endAt){
       if(state.action.kind==="chop") finishChop();
+      if(state.action.kind==="mine") finishMine();
       if(state.action.kind==="fish") finishFish();
     }
 
     stepMovement(dt);
     animateAction(now);
-    if(state.map==="overworld") syncTreesAndStumps();
+    if(state.map==="overworld") { syncTreesAndStumps(); syncRocksAndStubs(); }
     updatePopups(now);
 
     const ctx=getContextAction();
