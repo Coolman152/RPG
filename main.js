@@ -698,6 +698,14 @@ function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id,
   scene.add(dir);
 
   const ISO_PITCH = Math.atan(Math.sqrt(1/2));
+
+  // Camera tuning
+  const CAM_OFFSET = new THREE.Vector3(14, 14, 14);
+  const CAM_DEADZONE_X = 4.2; // world units (roughly ~1/3 screen width at default zoom)
+  const CAM_DEADZONE_Z = 4.2;
+  const CAM_LERP = 0.14;      // smoothing factor (0..1)
+  const CAM_PAN_SPEED = 8.5;  // world units/sec for free pan
+
   const cam = new THREE.OrthographicCamera(-10,10,10,-10,0.1,800);
 
     let camZoom = 1.06; // higher = closer
@@ -1056,23 +1064,24 @@ function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id,
         stumpMeshes.set(tr.id, stump);
       }
       syncTreesAndStumps();
+// Rocks / stubs
+for (const rk of (state.world.rocks||[])) {
+  const rock = makeRockMesh(rk.kind);
+  rock.userData = { kind:"rock", rockId: rk.id, tx: rk.tx, tz: rk.tz };
+  resourceGroup.add(rock);
+  rockPickables.push(rock);
 
-      // Rocks / stubs
-      for (const rk of (state.world.rocks||[])) {
-        const rock = makeRockMesh(rk.kind);
-        rock.userData = { kind:"rock", rockId: rk.id, tx: rk.tx, tz: rk.tz };
-        resourceGroup.add(rock);
-        rockPickables.push(rock);
+  const stub = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.26,0.30,0.18,16),
+    new THREE.MeshStandardMaterial({ color:0x3a3f46, roughness:1, metalness:0 })
+  );
+  stub.userData = { kind:"rockstub", rockId: rk.id };
+  resourceGroup.add(stub);
+  rockStubMeshes.set(rk.id, stub);
+}
+syncRocksAndStubs();
 
-        const stub = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.26,0.30,0.18,16),
-          new THREE.MeshStandardMaterial({ color:0x3a3f46, roughness:1, metalness:0 })
-        );
-        stub.userData = { kind:"rockstub", rockId: rk.id };
-        resourceGroup.add(stub);
-        rockStubMeshes.set(rk.id, stub);
-      }
-      syncRocksAndStubs();
+
 
       for (const sp of (state.world.fishingSpots||[])) {
         const mesh = makeFishingSpotMesh(sp);
@@ -1323,7 +1332,62 @@ function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id,
     }
   }
 
-  // Pointer down
+  
+// Two-finger pan (touch): pans camera in FREE mode OR when using 2 fingers in FOLLOW mode.
+// This avoids interfering with tap-to-move.
+const activeTouches = new Map(); // pointerId -> {x,y}
+let lastTwoFingerCenter = null;
+
+function screenToWorldPan(dxPx, dyPx) {
+  // Convert screen drag to world-space pan for our isometric view.
+  // Scale with orthographic camera size (approx).
+  const scale = 0.018 * (13 / (cam.zoom || 1)); // tuned constant
+  // Drag right should pan camera right; drag down pans camera down.
+  camFocus.x -= dxPx * scale;
+  camFocus.z -= dyPx * scale;
+}
+
+renderer.domElement.addEventListener("pointerdown", (ev) => {
+  if (ev.pointerType === "touch") {
+    activeTouches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (activeTouches.size >= 2) {
+      const pts = Array.from(activeTouches.values());
+      const cx = (pts[0].x + pts[1].x) / 2;
+      const cy = (pts[0].y + pts[1].y) / 2;
+      lastTwoFingerCenter = { x: cx, y: cy };
+    }
+  }
+});
+
+renderer.domElement.addEventListener("pointermove", (ev) => {
+  if (ev.pointerType !== "touch") return;
+  if (!activeTouches.has(ev.pointerId)) return;
+  activeTouches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+  if (activeTouches.size >= 2 && lastTwoFingerCenter) {
+    const pts = Array.from(activeTouches.values());
+    const cx = (pts[0].x + pts[1].x) / 2;
+    const cy = (pts[0].y + pts[1].y) / 2;
+    const dx = cx - lastTwoFingerCenter.x;
+    const dy = cy - lastTwoFingerCenter.y;
+    if (Math.abs(dx) + Math.abs(dy) > 0.5) {
+      // Allow pan even in follow mode while two fingers are down
+      camMode = "free";
+      screenToWorldPan(dx, dy);
+      lastTwoFingerCenter = { x: cx, y: cy };
+    }
+  }
+});
+
+function clearTouch(ev) {
+  if (ev.pointerType !== "touch") return;
+  activeTouches.delete(ev.pointerId);
+  if (activeTouches.size < 2) lastTwoFingerCenter = null;
+}
+renderer.domElement.addEventListener("pointerup", clearTouch);
+renderer.domElement.addEventListener("pointercancel", clearTouch);
+
+// Pointer down
   renderer.domElement.addEventListener("wheel", (ev) => {
     // Zoom with trackpad/mouse wheel
     ev.preventDefault();
@@ -1394,9 +1458,14 @@ function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id,
 
   // Keyboard
   window.addEventListener("keydown", (e) => {
+    keysDown.add(e.key.toLowerCase());
     const k=e.key.toLowerCase();
     if(k==="e") doInteract();
     if(k==="escape") closeModal();
+    if(k==="c"){
+      camMode = (camMode === "follow") ? "free" : "follow";
+      setMsg(camMode === "free" ? "Camera: FREE (WASD to pan)" : "Camera: FOLLOW");
+    }
     if(k==="+" || k==="="){ camZoom *= 1.12; applyZoom(); }
     if(k==="-" || k==="_"){ camZoom /= 1.12; applyZoom(); }
     if(k==="r"){
@@ -1407,7 +1476,12 @@ function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id,
       setMsg("Reset");
       updateHUD();
     }
-  });
+  
+window.addEventListener("keyup", (e) => {
+  keysDown.delete(e.key.toLowerCase());
+});
+
+});
 
   // Actions
   function addXp(skillKey, amount) {
@@ -1559,16 +1633,66 @@ function finishFish() {
     player.rotation.y += (state.action.kind==="fish")?0.04:(state.action.kind==="mine"?0.05:0.06);
   }
 
-  function updateCamera() {
-    const pos=player.position;
-    const follow=new THREE.Vector3(pos.x,pos.y,pos.z);
-    const offset=new THREE.Vector3(14,14,14);
-    cam.position.copy(follow).add(offset);
-    cam.rotation.order="YXZ";
-    cam.rotation.y=Math.PI/4;
-    cam.rotation.x=-ISO_PITCH;
-    cam.lookAt(follow);
+  // Camera state
+let camFocus = new THREE.Vector3(0,0,0); // what the camera looks at / follows
+let camMode = "follow"; // "follow" or "free"
+let keysDown = new Set();
+
+function initCameraFocus() {
+  camFocus.set(player.position.x, player.position.y, player.position.z);
+}
+
+function updateCamera(dt=0.016) {
+  // Initialize on first call
+  if (camFocus.lengthSq() === 0 && (player.position.x!==0 || player.position.z!==0)) {
+    initCameraFocus();
   }
+
+  if (camMode === "follow") {
+    // Deadzone follow: only move focus when player drifts far from focus.
+    const dx = player.position.x - camFocus.x;
+    const dz = player.position.z - camFocus.z;
+
+    let targetX = camFocus.x;
+    let targetZ = camFocus.z;
+
+    if (Math.abs(dx) > CAM_DEADZONE_X) {
+      targetX += dx - Math.sign(dx) * CAM_DEADZONE_X;
+    }
+    if (Math.abs(dz) > CAM_DEADZONE_Z) {
+      targetZ += dz - Math.sign(dz) * CAM_DEADZONE_Z;
+    }
+
+    // Smooth focus toward target to reduce jitter on direction changes
+    camFocus.x += (targetX - camFocus.x) * CAM_LERP;
+    camFocus.z += (targetZ - camFocus.z) * CAM_LERP;
+
+    // Keep Y near player for nicer height transitions
+    camFocus.y += (player.position.y - camFocus.y) * 0.22;
+
+  } else {
+    // Free pan with keyboard (WASD / arrows)
+    let vx = 0, vz = 0;
+    if (keysDown.has("w") || keysDown.has("arrowup")) vz -= 1;
+    if (keysDown.has("s") || keysDown.has("arrowdown")) vz += 1;
+    if (keysDown.has("a") || keysDown.has("arrowleft")) vx -= 1;
+    if (keysDown.has("d") || keysDown.has("arrowright")) vx += 1;
+    if (vx !== 0 || vz !== 0) {
+      const len = Math.hypot(vx, vz) || 1;
+      vx /= len; vz /= len;
+      camFocus.x += vx * CAM_PAN_SPEED * dt;
+      camFocus.z += vz * CAM_PAN_SPEED * dt;
+    }
+  }
+
+  // Place camera at offset from focus (isometric)
+  cam.position.copy(camFocus).add(CAM_OFFSET);
+  cam.rotation.order = "YXZ";
+  cam.rotation.y = Math.PI / 4;
+  cam.rotation.x = -ISO_PITCH;
+  cam.lookAt(camFocus);
+}
+
 
   // Main loop
   let last=performance.now();
@@ -1585,23 +1709,6 @@ function finishFish() {
     stepMovement(dt);
     animateAction(now);
     if(state.map==="overworld") { syncTreesAndStumps(); syncRocksAndStubs(); }
-
-      // Rocks / stubs
-      for (const rk of (state.world.rocks||[])) {
-        const rock = makeRockMesh(rk.kind);
-        rock.userData = { kind:"rock", rockId: rk.id, tx: rk.tx, tz: rk.tz };
-        resourceGroup.add(rock);
-        rockPickables.push(rock);
-
-        const stub = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.26,0.30,0.18,16),
-          new THREE.MeshStandardMaterial({ color:0x3a3f46, roughness:1, metalness:0 })
-        );
-        stub.userData = { kind:"rockstub", rockId: rk.id };
-        resourceGroup.add(stub);
-        rockStubMeshes.set(rk.id, stub);
-      }
-      syncRocksAndStubs();
     updatePopups(now);
 
     const ctx=getContextAction();
@@ -1609,7 +1716,7 @@ function finishFish() {
     if(performance.now()>msgUntil) msgEl.textContent="";
 
     updateHUD();
-    updateCamera();
+    updateCamera(dt);
     renderer.render(scene,cam);
     requestAnimationFrame(tick);
   }
