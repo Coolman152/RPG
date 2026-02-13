@@ -21,7 +21,7 @@
   const BANK_VIEW_SLOTS = 30;
 
   const SAVE_KEY = "logger_save_0_0_1";
-  const USERNAME_KEY = "logger_username_0_0_1";
+  const USERNAME_KEY = "logger_username_v1";
 
   // Username
   function getUsername() {
@@ -38,14 +38,14 @@
 
   // Items
   const ITEM_DEFS = {
-    log:  { name: "Logs", icon: "🪵", stackable: true },
-    fish: { name: "Raw Fish", icon: "🐟", stackable: true },
-    ore_iron: { name: "Iron Ore", icon: "🔩", stackable: true },
-    ore_tin: { name: "Tin Ore", icon: "⚪️", stackable: true },
+    log:   { name: "Logs", icon: "🪵", stackable: true },
+    fish:  { name: "Raw Fish", icon: "🐟", stackable: true },
     ore_copper: { name: "Copper Ore", icon: "🟠", stackable: true },
-    axe:  { name: "Bronze Axe", icon: "🪓", stackable: false },
-    rod:  { name: "Fishing Rod", icon: "🎣", stackable: false },
-    pick: { name: "Bronze Pickaxe", icon: "⛏️", stackable: false },
+    ore_tin:    { name: "Tin Ore", icon: "⚪️", stackable: true },
+    ore_iron:   { name: "Iron Ore", icon: "🔩", stackable: true },
+    axe:   { name: "Bronze Axe", icon: "🪓", stackable: false },
+    rod:   { name: "Fishing Rod", icon: "🎣", stackable: false },
+    pick:  { name: "Bronze Pickaxe", icon: "⛏️", stackable: false },
   };
 
   const SHOP_STOCK = [
@@ -103,12 +103,6 @@
           { id: "f1", tx: 25, tz: 10 },
           { id: "f2", tx: 24, tz: 12 },
           { id: "f3", tx: 27, tz: 12 },
-        ],
-        rocks: [
-          { id: "r1", kind: "copper", tx: 18, tz: 21, respawnAt: 0, stubUntil: 0 },
-          { id: "r2", kind: "tin",    tx: 19, tz: 22, respawnAt: 0, stubUntil: 0 },
-          { id: "r3", kind: "copper", tx: 20, tz: 21, respawnAt: 0, stubUntil: 0 },
-          { id: "r4", kind: "iron",   tx: 21, tz: 23, respawnAt: 0, stubUntil: 0 },
         ]
       },
       ui: { activeTab: null, selectedSkill: "woodcutting", modal: null, modalNpcId: null }
@@ -136,6 +130,7 @@
       ensureAllSkills(s.skills);
       s.world ??= { trees: [], fishingSpots: [] };
       s.world.trees ??= [];
+      s.world.rocks ??= [];
       s.world.fishingSpots ??= [];
       s.world.rocks ??= [];
       s.ui ??= { activeTab: null, selectedSkill: "woodcutting", modal: null, modalNpcId: null };
@@ -698,14 +693,6 @@ function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id,
   scene.add(dir);
 
   const ISO_PITCH = Math.atan(Math.sqrt(1/2));
-
-  // Camera tuning
-  const CAM_OFFSET = new THREE.Vector3(14, 14, 14);
-  const CAM_DEADZONE_X = 4.2; // world units (roughly ~1/3 screen width at default zoom)
-  const CAM_DEADZONE_Z = 4.2;
-  const CAM_LERP = 0.14;      // smoothing factor (0..1)
-  const CAM_PAN_SPEED = 8.5;  // world units/sec for free pan
-
   const cam = new THREE.OrthographicCamera(-10,10,10,-10,0.1,800);
 
     let camZoom = 1.06; // higher = closer
@@ -870,17 +857,13 @@ function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id,
     const mat = new THREE.MeshStandardMaterial({ color, roughness: 1, metalness: 0 });
     const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.34, 0), mat);
     rock.position.y = 0.22;
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.32,0.36,0.08,18),
-      new THREE.MeshStandardMaterial({ color:0x2a3647, roughness:1, metalness:0 })
-    );
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.32,0.36,0.08,18), new THREE.MeshStandardMaterial({ color:0x2a3647, roughness:1, metalness:0 }));
     base.position.y = 0.04;
     g.add(base, rock);
     return g;
   }
 
   function makeTreeMesh() {
-
     const g = new THREE.Group();
     const foliageMat = new THREE.MeshStandardMaterial({ color:0x2f8a3a, roughness:1, metalness:0 });
     const trunkMat = new THREE.MeshStandardMaterial({ color:0x7a4a2a, roughness:1, metalness:0 });
@@ -1064,24 +1047,20 @@ function removeOneFromBank(id) { return removeItemFromList(state.bank.items, id,
         stumpMeshes.set(tr.id, stump);
       }
       syncTreesAndStumps();
-// Rocks / stubs
-for (const rk of (state.world.rocks||[])) {
-  const rock = makeRockMesh(rk.kind);
-  rock.userData = { kind:"rock", rockId: rk.id, tx: rk.tx, tz: rk.tz };
-  resourceGroup.add(rock);
-  rockPickables.push(rock);
 
-  const stub = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.26,0.30,0.18,16),
-    new THREE.MeshStandardMaterial({ color:0x3a3f46, roughness:1, metalness:0 })
-  );
-  stub.userData = { kind:"rockstub", rockId: rk.id };
-  resourceGroup.add(stub);
-  rockStubMeshes.set(rk.id, stub);
-}
-syncRocksAndStubs();
+      // Rocks / stubs
+      for (const rk of (state.world.rocks||[])) {
+        const rock = makeRockMesh(rk.kind);
+        rock.userData = { kind:"rock", rockId: rk.id, tx: rk.tx, tz: rk.tz };
+        resourceGroup.add(rock);
+        rockPickables.push(rock);
 
-
+        const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.26,0.30,0.18,16), new THREE.MeshStandardMaterial({ color:0x3a3f46, roughness:1, metalness:0 }));
+        stub.userData = { kind:"rockstub", rockId: rk.id };
+        resourceGroup.add(stub);
+        rockStubMeshes.set(rk.id, stub);
+      }
+      syncRocksAndStubs();
 
       for (const sp of (state.world.fishingSpots||[])) {
         const mesh = makeFishingSpotMesh(sp);
@@ -1108,6 +1087,27 @@ syncRocksAndStubs();
   if (state.map !== "overworld" && !interiors[state.map]) state.map = "spawn_inn";
   rebuildWorld();
 
+  function syncRocksAndStubs() {
+    if (state.map!=="overworld") return;
+    const m=overworld;
+    const now=performance.now();
+    for (const rockObj of rockPickables) {
+      const rk=(state.world.rocks||[]).find(r=>r.id===rockObj.userData.rockId);
+      if(!rk) continue;
+      const alive=rockAlive(rk,now);
+      const stubOn=stubAlive(rk,now);
+      const pos=tileToWorld(m,rk.tx,rk.tz);
+      const y=tileY(m,rk.tx,rk.tz);
+      rockObj.visible=alive;
+      rockObj.position.set(pos.x,y,pos.z);
+      const stub=rockStubMeshes.get(rk.id);
+      if(stub){
+        stub.visible = (!alive) && stubOn;
+        stub.position.set(pos.x, y+0.08, pos.z);
+      }
+    }
+  }
+
   function syncTreesAndStumps() {
     if (state.map!=="overworld") return;
     const m=overworld;
@@ -1129,28 +1129,7 @@ syncRocksAndStubs();
     }
   }
 
-  function syncRocksAndStubs() {
-  if (state.map!=="overworld") return;
-  const m=overworld;
-  const now=performance.now();
-  for (const rockObj of rockPickables) {
-    const rk=(state.world.rocks||[]).find(r=>r.id===rockObj.userData.rockId);
-    if(!rk) continue;
-    const alive=rockAlive(rk,now);
-    const stubOn=stubAlive(rk,now);
-    const pos=tileToWorld(m,rk.tx,rk.tz);
-    const y=tileY(m,rk.tx,rk.tz);
-    rockObj.visible=alive;
-    rockObj.position.set(pos.x,y,pos.z);
-    const stub=rockStubMeshes.get(rk.id);
-    if (stub) {
-      stub.visible = (!alive) && stubOn;
-      stub.position.set(pos.x, y+0.10, pos.z);
-    }
-  }
-}
-
-// Raycast
+  // Raycast
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   function pickFromEvent(ev) {
@@ -1161,11 +1140,7 @@ syncRocksAndStubs();
     pointer.y = -(y*2-1);
     raycaster.setFromCamera(pointer, cam);
 
-    const objects = pickables.concat(doorPickables)
-      .concat(treePickables.filter(t=>t.visible))
-      .concat(rockPickables.filter(r=>r.visible))
-      .concat(npcPickables)
-      .concat(fishPickables);
+    const objects = pickables.concat(doorPickables).concat(treePickables.filter(t=>t.visible)).concat(npcPickables).concat(fishPickables);
     const hits = raycaster.intersectObjects(objects, true);
     if (!hits.length) return null;
 
@@ -1280,10 +1255,6 @@ syncRocksAndStubs();
         if (adj(state.player.tx,state.player.tz,sp.tx,sp.tz)===1) return {type:"fish", spot:sp, label:"Fish"};
       }
       const now=performance.now();
-      for (const rk of (state.world.rocks||[])) {
-        if (!rockAlive(rk,now)) continue;
-        if (adj(state.player.tx,state.player.tz,rk.tx,rk.tz)===1) return {type:"rock", rock:rk, label:"Mine Rock"};
-      }
       for (const tr of state.world.trees) {
         if (!treeAlive(tr,now)) continue;
         if (adj(state.player.tx,state.player.tz,tr.tx,tr.tz)===1) return {type:"tree", tree:tr, label:"Chop Tree"};
@@ -1332,62 +1303,7 @@ syncRocksAndStubs();
     }
   }
 
-  
-// Two-finger pan (touch): pans camera in FREE mode OR when using 2 fingers in FOLLOW mode.
-// This avoids interfering with tap-to-move.
-const activeTouches = new Map(); // pointerId -> {x,y}
-let lastTwoFingerCenter = null;
-
-function screenToWorldPan(dxPx, dyPx) {
-  // Convert screen drag to world-space pan for our isometric view.
-  // Scale with orthographic camera size (approx).
-  const scale = 0.018 * (13 / (cam.zoom || 1)); // tuned constant
-  // Drag right should pan camera right; drag down pans camera down.
-  camFocus.x -= dxPx * scale;
-  camFocus.z -= dyPx * scale;
-}
-
-renderer.domElement.addEventListener("pointerdown", (ev) => {
-  if (ev.pointerType === "touch") {
-    activeTouches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-    if (activeTouches.size >= 2) {
-      const pts = Array.from(activeTouches.values());
-      const cx = (pts[0].x + pts[1].x) / 2;
-      const cy = (pts[0].y + pts[1].y) / 2;
-      lastTwoFingerCenter = { x: cx, y: cy };
-    }
-  }
-});
-
-renderer.domElement.addEventListener("pointermove", (ev) => {
-  if (ev.pointerType !== "touch") return;
-  if (!activeTouches.has(ev.pointerId)) return;
-  activeTouches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-
-  if (activeTouches.size >= 2 && lastTwoFingerCenter) {
-    const pts = Array.from(activeTouches.values());
-    const cx = (pts[0].x + pts[1].x) / 2;
-    const cy = (pts[0].y + pts[1].y) / 2;
-    const dx = cx - lastTwoFingerCenter.x;
-    const dy = cy - lastTwoFingerCenter.y;
-    if (Math.abs(dx) + Math.abs(dy) > 0.5) {
-      // Allow pan even in follow mode while two fingers are down
-      camMode = "free";
-      screenToWorldPan(dx, dy);
-      lastTwoFingerCenter = { x: cx, y: cy };
-    }
-  }
-});
-
-function clearTouch(ev) {
-  if (ev.pointerType !== "touch") return;
-  activeTouches.delete(ev.pointerId);
-  if (activeTouches.size < 2) lastTwoFingerCenter = null;
-}
-renderer.domElement.addEventListener("pointerup", clearTouch);
-renderer.domElement.addEventListener("pointercancel", clearTouch);
-
-// Pointer down
+  // Pointer down
   renderer.domElement.addEventListener("wheel", (ev) => {
     // Zoom with trackpad/mouse wheel
     ev.preventDefault();
@@ -1441,7 +1357,6 @@ renderer.domElement.addEventListener("pointercancel", clearTouch);
     }
 
     if(hit.kind==="tree" && state.map==="overworld"){
-
       const tr=state.world.trees.find(t=>t.id===hit.treeId);
       if(!tr || !treeAlive(tr)) return setMsg("No tree");
       const stand=bestAdjacent(m, tr.tx, tr.tz);
@@ -1458,14 +1373,9 @@ renderer.domElement.addEventListener("pointercancel", clearTouch);
 
   // Keyboard
   window.addEventListener("keydown", (e) => {
-    keysDown.add(e.key.toLowerCase());
     const k=e.key.toLowerCase();
     if(k==="e") doInteract();
     if(k==="escape") closeModal();
-    if(k==="c"){
-      camMode = (camMode === "follow") ? "free" : "follow";
-      setMsg(camMode === "free" ? "Camera: FREE (WASD to pan)" : "Camera: FOLLOW");
-    }
     if(k==="+" || k==="="){ camZoom *= 1.12; applyZoom(); }
     if(k==="-" || k==="_"){ camZoom /= 1.12; applyZoom(); }
     if(k==="r"){
@@ -1476,12 +1386,7 @@ renderer.domElement.addEventListener("pointercancel", clearTouch);
       setMsg("Reset");
       updateHUD();
     }
-  
-window.addEventListener("keyup", (e) => {
-  keysDown.delete(e.key.toLowerCase());
-});
-
-});
+  });
 
   // Actions
   function addXp(skillKey, amount) {
@@ -1509,26 +1414,25 @@ window.addEventListener("keyup", (e) => {
   }
 
   function finishMine() {
-  const now=performance.now();
-  const rk=(state.world.rocks||[]).find(r=>r.id===state.action.targetId);
-  state.action=null;
-  if(!rk) return;
+    const now=performance.now();
+    const rk=(state.world.rocks||[]).find(r=>r.id===state.action.targetId);
+    state.action=null;
+    if(!rk) return;
 
-  const itemId = rk.kind === "iron" ? "ore_iron" : rk.kind === "tin" ? "ore_tin" : "ore_copper";
-  const added = addItemToInv(itemId);
-  setMsg(added ? `You mine ${ITEM_DEFS[itemId].name}` : "Inventory full (ore dropped)");
-  addXp("mining", XP_MINE);
-  spawnXpPopup(XP_MINE, "⛏️");
-  if (Math.random() < 0.25) addCoins(1);
+    const itemId = rk.kind === "iron" ? "ore_iron" : rk.kind === "tin" ? "ore_tin" : "ore_copper";
+    const added = addItemToInv(itemId);
+    setMsg(added ? `You mine ${ITEM_DEFS[itemId].name}` : "Inventory full (ore dropped)");
+    addXp("mining", XP_MINE);
+    spawnXpPopup(XP_MINE, "⛏️");
+    if (Math.random() < 0.25) addCoins(1);
 
-  rk.respawnAt = now + ROCK_RESPAWN_MS;
-  rk.stubUntil = rk.respawnAt;
+    rk.respawnAt = now + ROCK_RESPAWN_MS;
+    rk.stubUntil = rk.respawnAt;
 
-  saveState(); updateHUD();
-}
+    saveState(); updateHUD();
+  }
 
-function finishFish() {
-
+  function finishFish() {
     state.action=null;
     const added=addItemToInv("fish");
     setMsg(added ? "You catch a fish" : "Inventory full (fish dropped)");
@@ -1633,66 +1537,16 @@ function finishFish() {
     player.rotation.y += (state.action.kind==="fish")?0.04:(state.action.kind==="mine"?0.05:0.06);
   }
 
-  // Camera state
-let camFocus = new THREE.Vector3(0,0,0); // what the camera looks at / follows
-let camMode = "follow"; // "follow" or "free"
-let keysDown = new Set();
-
-function initCameraFocus() {
-  camFocus.set(player.position.x, player.position.y, player.position.z);
-}
-
-function updateCamera(dt=0.016) {
-  // Initialize on first call
-  if (camFocus.lengthSq() === 0 && (player.position.x!==0 || player.position.z!==0)) {
-    initCameraFocus();
+  function updateCamera() {
+    const pos=player.position;
+    const follow=new THREE.Vector3(pos.x,pos.y,pos.z);
+    const offset=new THREE.Vector3(14,14,14);
+    cam.position.copy(follow).add(offset);
+    cam.rotation.order="YXZ";
+    cam.rotation.y=Math.PI/4;
+    cam.rotation.x=-ISO_PITCH;
+    cam.lookAt(follow);
   }
-
-  if (camMode === "follow") {
-    // Deadzone follow: only move focus when player drifts far from focus.
-    const dx = player.position.x - camFocus.x;
-    const dz = player.position.z - camFocus.z;
-
-    let targetX = camFocus.x;
-    let targetZ = camFocus.z;
-
-    if (Math.abs(dx) > CAM_DEADZONE_X) {
-      targetX += dx - Math.sign(dx) * CAM_DEADZONE_X;
-    }
-    if (Math.abs(dz) > CAM_DEADZONE_Z) {
-      targetZ += dz - Math.sign(dz) * CAM_DEADZONE_Z;
-    }
-
-    // Smooth focus toward target to reduce jitter on direction changes
-    camFocus.x += (targetX - camFocus.x) * CAM_LERP;
-    camFocus.z += (targetZ - camFocus.z) * CAM_LERP;
-
-    // Keep Y near player for nicer height transitions
-    camFocus.y += (player.position.y - camFocus.y) * 0.22;
-
-  } else {
-    // Free pan with keyboard (WASD / arrows)
-    let vx = 0, vz = 0;
-    if (keysDown.has("w") || keysDown.has("arrowup")) vz -= 1;
-    if (keysDown.has("s") || keysDown.has("arrowdown")) vz += 1;
-    if (keysDown.has("a") || keysDown.has("arrowleft")) vx -= 1;
-    if (keysDown.has("d") || keysDown.has("arrowright")) vx += 1;
-    if (vx !== 0 || vz !== 0) {
-      const len = Math.hypot(vx, vz) || 1;
-      vx /= len; vz /= len;
-      camFocus.x += vx * CAM_PAN_SPEED * dt;
-      camFocus.z += vz * CAM_PAN_SPEED * dt;
-    }
-  }
-
-  // Place camera at offset from focus (isometric)
-  cam.position.copy(camFocus).add(CAM_OFFSET);
-  cam.rotation.order = "YXZ";
-  cam.rotation.y = Math.PI / 4;
-  cam.rotation.x = -ISO_PITCH;
-  cam.lookAt(camFocus);
-}
-
 
   // Main loop
   let last=performance.now();
@@ -1716,7 +1570,7 @@ function updateCamera(dt=0.016) {
     if(performance.now()>msgUntil) msgEl.textContent="";
 
     updateHUD();
-    updateCamera(dt);
+    updateCamera();
     renderer.render(scene,cam);
     requestAnimationFrame(tick);
   }
