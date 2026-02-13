@@ -1,4 +1,4 @@
-Isometric 3D RPG — Village v8
+Isometric 3D RPG — Village v9
 
 Fixes + improvements:
 - NPC UI is now a fullscreen overlay with a clear ✕ close button.
@@ -17,4 +17,8 @@ Controls:
 - Tap/click to move
 - Tap NPC/door/tree/fishing spot
 - E to interact
-- R to reset save (v8 has a new save key, so it won’t conflict with v7)
+- R to reset save (v9 has a new save key, so it won’t conflict with v7)
+
+
+v9 Fix:
+- Modal overlay no longer shows on first load; .hidden now reliably hides it.

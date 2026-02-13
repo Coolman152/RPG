@@ -32,7 +32,7 @@ html, body { margin: 0; height: 100%; background: #0b0f14; font-family: system-u
 .coinsHud{ margin-left:auto; font-weight: 850; font-size: 13px; opacity:0.95; }
 
 .panel{ margin-top: 10px; padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.12); background: rgba(0,0,0,0.35); }
-.hidden{ display:none; }
+.hidden{ display:none !important; }
 .panelTitle{ font-weight: 800; margin-bottom: 8px; }
 
 .skillsWrap{ display:grid; grid-template-columns: 1fr 1.2fr; gap: 10px; }
@@ -147,3 +147,5 @@ kbd { padding: 1px 6px; border: 1px solid rgba(255,255,255,0.25); border-bottom-
 
 .bankWrap{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .bankTitle{ font-weight: 900; margin-bottom: 6px; }
+
+.modalOverlay.hidden{ display:none !important; }

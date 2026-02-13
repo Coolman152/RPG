@@ -282,6 +282,7 @@
     state.ui.modal = null;
     state.ui.modalNpcId = null;
     modalOverlay.classList.add("hidden");
+    modalOverlay.style.display = "none";
     modalShopEl.classList.add("hidden");
     modalSellEl.classList.add("hidden");
     modalBankEl.classList.add("hidden");
@@ -294,6 +295,7 @@
     state.ui.modalNpcId = npcId;
     modalTitleEl.textContent = title;
     modalOverlay.classList.remove("hidden");
+    modalOverlay.style.display = "flex";
     modalShopEl.classList.toggle("hidden", kind !== "shop");
     modalSellEl.classList.toggle("hidden", kind !== "sell");
     modalBankEl.classList.toggle("hidden", kind !== "bank");
@@ -418,6 +420,8 @@
   if (state.ui.activeTab === "inv") { state.ui.activeTab=null; setTab("inv"); }
   // don't restore modal automatically to avoid "stuck" UI
   state.ui.modal = null; state.ui.modalNpcId = null;
+  modalOverlay.classList.add("hidden");
+  modalOverlay.style.display = "none";
 
   // Maps
   function makeMap(w, h) {
