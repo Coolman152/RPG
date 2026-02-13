@@ -1,11 +1,11 @@
-Logger v0.0.1 (Phase 1 — Step 2)
+Logger v0.0.1
 
-Added: Mining
-- Rocks (copper/tin/iron) placed near the village outskirts.
-- Requires Bronze Pickaxe (buy from Tool Trader).
-- Ores stack in inventory/bank.
-- Rocks deplete -> stub -> respawn.
-- Mining grants Mining XP (+XP popup).
+Re-implemented Mining cleanly:
+- Buy a ⛏️ Bronze Pickaxe from Tool Trader
+- Mine rocks (Copper/Tin/Iron) near the village outskirts
+- Ores stack in inventory/bank
+- Rocks deplete -> stub -> respawn
+- Mining XP + popup
 
 Controls:
 - Tap/click to move
