@@ -3,17 +3,61 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Isometric 3D RPG — Village v4</title>
+  <title>Isometric 3D RPG — Village v7</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="ui">
-    <div class="title">Isometric 3D RPG — Village v4</div>
-    <div id="stats"></div>
-    <div id="inv"></div>
-    <div id="msg" class="msg"></div>
+    <div class="toprow">
+      <div class="title">Isometric 3D RPG — Village v7</div>
+      <div class="tabs">
+        <button id="btnSkills" class="tabbtn" type="button">Skills</button>
+        <button id="btnInv" class="tabbtn" type="button">Inventory</button>
+      </div>
+    </div>
+
+    <div id="hudRow" class="hudrow">
+      <div id="context" class="context"></div>
+      <div id="msg" class="msg"></div>
+    </div>
+
+    <div id="panelSkills" class="panel hidden">
+      <div class="panelTitle">Skills</div>
+      <div class="skillsWrap">
+        <div id="skillsList" class="skillsList"></div>
+        <div id="skillDetail" class="skillDetail">
+          <div class="skillName" id="skillName">Select a skill</div>
+          <div class="skillMeta" id="skillMeta"></div>
+          <div class="skillBar">
+            <div id="skillBarFill" class="skillBarFill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="panelInv" class="panel hidden">
+      <div class="panelTitle">Inventory</div>
+      <div class="invTop">
+        <div id="invMeta" class="invMeta"></div>
+        <div id="coins" class="coins"></div>
+      </div>
+      <div id="invGrid" class="invGrid"></div>
+      <div class="smallHint">Tip: Tools (axe/rod) take an inventory slot for now.</div>
+    </div>
+
+    <!-- Interaction modal (shops, bank, buyers) -->
+    <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modalCard">
+        <div class="modalTop">
+          <div class="modalTitle" id="modalTitle">Interaction</div>
+          <button class="modalClose" id="modalClose" type="button">✕</button>
+        </div>
+        <div class="modalBody" id="modalBody"></div>
+      </div>
+    </div>
+
     <div class="hint">
-      Tap/click to move • Tap trees to walk next to them • <kbd>E</kbd> chop • Tap doors to enter/exit • <kbd>R</kbd> reset
+      Tap/click to move • Tap trees/doors/NPCs/spots • <kbd>E</kbd> interact • <kbd>R</kbd> reset
     </div>
   </div>
 
