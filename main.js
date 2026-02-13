@@ -1,13 +1,9 @@
 (() => {
-  // =========================
-  // Tunables
-  // =========================
   const XP_CHOP = 25;
   const XP_FISH = 20;
   const CHOP_TIME_MS = 900;
-  const FISH_TIME_MS = 900;
+  const FISH_TIME_MS = 1100;
   const TREE_RESPAWN_MS = 6000;
-  const FISH_RESPAWN_MS = 2500;
 
   const TILE = 1.0;
   const LEVEL_H = 0.28;
@@ -19,13 +15,12 @@
   const IN_H = 10;
 
   const INVENTORY_CAPACITY = 20;
+  const BANK_VIEW_SLOTS = 30;
 
-  const SAVE_KEY = "iso_rpg_village_save_v7";
+  const SAVE_KEY = "iso_rpg_village_save_v8";
   const USERNAME_KEY = "iso_rpg_username_v1";
 
-  // =========================
   // Username
-  // =========================
   function getUsername() {
     let name = localStorage.getItem(USERNAME_KEY);
     if (!name) {
@@ -38,29 +33,22 @@
   }
   const username = getUsername();
 
-  // =========================
   // Items
-  // =========================
   const ITEM_DEFS = {
-    log:        { name: "Logs",        icon: "🪵" },
-    fish:       { name: "Fish",        icon: "🐟" },
-    axe:        { name: "Bronze Axe",  icon: "🪓", tool: true },
-    fishingrod: { name: "Fishing Rod", icon: "🎣", tool: true },
+    log:  { name: "Logs", icon: "🪵" },
+    fish: { name: "Raw Fish", icon: "🐟" },
+    axe:  { name: "Bronze Axe", icon: "🪓" },
+    rod:  { name: "Fishing Rod", icon: "🎣" },
   };
 
-  const SHOP_PRICES = {
-    axe: 5,
-    fishingrod: 8,
-  };
+  const SHOP_STOCK = [
+    { itemId: "axe", price: 10, desc: "Required to chop trees." },
+    { itemId: "rod", price: 12, desc: "Required to fish at spots." },
+  ];
 
-  const BUY_PRICES = {
-    log: 1,
-    fish: 2,
-  };
+  const BUY_PRICES = { log: 2, fish: 3 };
 
-  // =========================
   // Skills
-  // =========================
   const SKILL_ORDER = [
     "Attack","Strength","Defence","Ranged","Prayer","Magic",
     "Runecraft","Construction","Dungeoneering","Hitpoints",
@@ -74,7 +62,6 @@
     for (let i = 1; i < lvl; i++) total += Math.floor(i + 300 * Math.pow(2, i / 7));
     return Math.floor(total / 4);
   }
-
   function ensureAllSkills(skillsObj) {
     for (const s of SKILL_ORDER) {
       const key = s.toLowerCase();
@@ -82,9 +69,7 @@
     }
   }
 
-  // =========================
   // Save / Load
-  // =========================
   function defaultState() {
     const skills = { woodcutting: { lvl: 1, xp: 0 }, fishing: { lvl: 1, xp: 0 } };
     ensureAllSkills(skills);
@@ -93,9 +78,10 @@
       player: { tx: 5, tz: 7, speedTilesPerSec: 4.2 },
       path: [],
       moveSeg: null,
-      action: null, // { type, endAt, id }
+      action: null, // { kind, endAt, targetId }
       pendingDoor: null,
-      inv: { items: [], coins: 10 }, // start with some coins
+      pendingNpc: null,
+      inv: { items: [], coins: 25 },
       bank: { items: [] },
       skills,
       world: {
@@ -107,12 +93,12 @@
           { id: "t5", tx: 10, tz: 28, respawnAt: 0, stumpUntil: 0 },
         ],
         fishingSpots: [
-          { id:"f1", tx: 26, tz: 10, respawnAt: 0 },
-          { id:"f2", tx: 27, tz: 12, respawnAt: 0 },
-          { id:"f3", tx: 24, tz: 11, respawnAt: 0 },
+          { id: "f1", tx: 25, tz: 10 },
+          { id: "f2", tx: 24, tz: 12 },
+          { id: "f3", tx: 27, tz: 12 },
         ]
       },
-      ui: { activeTab: null, selectedSkill: "woodcutting" }
+      ui: { activeTab: null, selectedSkill: "woodcutting", modal: null, modalNpcId: null }
     };
   }
 
@@ -122,31 +108,27 @@
       if (!raw) return defaultState();
       const s = JSON.parse(raw);
       if (!s?.player) return defaultState();
-
       s.map ??= "spawn_inn";
       s.path ??= [];
       s.moveSeg ??= null;
       s.action ??= null;
       s.pendingDoor ??= null;
-
+      s.pendingNpc ??= null;
       s.inv ??= { items: [], coins: 0 };
       s.inv.items ??= [];
       s.inv.coins ??= 0;
-
       s.bank ??= { items: [] };
       s.bank.items ??= [];
-
       s.skills ??= { woodcutting: { lvl: 1, xp: 0 }, fishing: { lvl: 1, xp: 0 } };
       ensureAllSkills(s.skills);
-
       s.world ??= { trees: [], fishingSpots: [] };
       s.world.trees ??= [];
       s.world.fishingSpots ??= [];
-
-      s.ui ??= { activeTab: null, selectedSkill: "woodcutting" };
+      s.ui ??= { activeTab: null, selectedSkill: "woodcutting", modal: null, modalNpcId: null };
       s.ui.activeTab ??= null;
       s.ui.selectedSkill ??= "woodcutting";
-
+      s.ui.modal ??= null;
+      s.ui.modalNpcId ??= null;
       return s;
     } catch {
       return defaultState();
@@ -157,42 +139,38 @@
   function saveState() { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); }
   setInterval(saveState, 5000);
 
-  // =========================
-  // Inventory helpers
-  // =========================
-  function invUsed() { return state.inv.items.length; }
-  function invFree() { return INVENTORY_CAPACITY - invUsed(); }
-  function hasItem(itemId) { return state.inv.items.includes(itemId); }
-  function removeOneItemFromInv(itemId) {
-    const idx = state.inv.items.indexOf(itemId);
-    if (idx >= 0) { state.inv.items.splice(idx,1); return true; }
-    return false;
-  }
-  function removeOneItemFromBank(itemId) {
-    const idx = state.bank.items.indexOf(itemId);
-    if (idx >= 0) { state.bank.items.splice(idx,1); return true; }
-    return false;
-  }
-
-  function addItemToInv(itemId) {
-    if (!ITEM_DEFS[itemId]) return false;
+  // Inventory / Bank helpers
+  const invUsed = () => state.inv.items.length;
+  const invFree = () => INVENTORY_CAPACITY - invUsed();
+  const hasItem = (id) => state.inv.items.includes(id);
+  const addItemToInv = (id) => {
+    if (!ITEM_DEFS[id]) return false;
     if (invUsed() >= INVENTORY_CAPACITY) return false;
-    state.inv.items.push(itemId);
+    state.inv.items.push(id);
     return true;
-  }
-
-  function addItemToBank(itemId) {
-    if (!ITEM_DEFS[itemId]) return false;
-    state.bank.items.push(itemId);
+  };
+  const removeOneFromInv = (id) => {
+    const i = state.inv.items.indexOf(id);
+    if (i < 0) return false;
+    state.inv.items.splice(i, 1);
     return true;
-  }
+  };
+  const addCoins = (n) => (state.inv.coins += n);
+  const spendCoins = (n) => {
+    if (state.inv.coins < n) return false;
+    state.inv.coins -= n;
+    return true;
+  };
 
-  function addCoins(n) { state.inv.coins += n; }
-  function spendCoins(n) { if (state.inv.coins < n) return false; state.inv.coins -= n; return true; }
+  const addItemToBank = (id) => state.bank.items.push(id);
+  const removeOneFromBank = (id) => {
+    const i = state.bank.items.indexOf(id);
+    if (i < 0) return false;
+    state.bank.items.splice(i, 1);
+    return true;
+  };
 
-  // =========================
   // UI elements
-  // =========================
   const btnSkills = document.getElementById("btnSkills");
   const btnInv = document.getElementById("btnInv");
   const panelSkills = document.getElementById("panelSkills");
@@ -204,31 +182,28 @@
   const invGridEl = document.getElementById("invGrid");
   const invMetaEl = document.getElementById("invMeta");
   const coinsEl = document.getElementById("coins");
+  const coinsHudEl = document.getElementById("coinsHud");
   const contextEl = document.getElementById("context");
   const msgEl = document.getElementById("msg");
 
-  const modalEl = document.getElementById("modal");
+  // Modal overlay
+  const modalOverlay = document.getElementById("modalOverlay");
   const modalTitleEl = document.getElementById("modalTitle");
-  const modalBodyEl = document.getElementById("modalBody");
-  const modalCloseEl = document.getElementById("modalClose");
-  modalCloseEl.addEventListener("click", () => closeModal());
-
-  function openModal(title, html) {
-    modalTitleEl.textContent = title;
-    modalBodyEl.innerHTML = html;
-    modalEl.classList.remove("hidden");
-  }
-  function closeModal() {
-    modalEl.classList.add("hidden");
-    modalTitleEl.textContent = "";
-    modalBodyEl.innerHTML = "";
-  }
-  modalEl.addEventListener("click", (e) => {
-    if (e.target === modalEl) closeModal();
-  });
+  const btnCloseModal = document.getElementById("btnCloseModal");
+  const modalShopEl = document.getElementById("modalShop");
+  const modalSellEl = document.getElementById("modalSell");
+  const modalBankEl = document.getElementById("modalBank");
+  const shopListEl = document.getElementById("shopList");
+  const sellListEl = document.getElementById("sellList");
+  const btnSellAll = document.getElementById("btnSellAll");
+  const sellInfoEl = document.getElementById("sellInfo");
+  const bankInvMetaEl = document.getElementById("bankInvMeta");
+  const bankInvGridEl = document.getElementById("bankInvGrid");
+  const bankMetaEl = document.getElementById("bankMeta");
+  const bankGridEl = document.getElementById("bankGrid");
 
   let msgUntil = 0;
-  function setMsg(text, ms = 1200) { msgEl.textContent = text; msgUntil = performance.now() + ms; }
+  const setMsg = (t, ms=1400) => { msgEl.textContent = t; msgUntil = performance.now()+ms; };
 
   function setTab(tabName) {
     state.ui.activeTab = (state.ui.activeTab === tabName) ? null : tabName;
@@ -237,51 +212,29 @@
     btnSkills.classList.toggle("active", state.ui.activeTab === "skills");
     btnInv.classList.toggle("active", state.ui.activeTab === "inv");
     saveState();
+    updateHUD();
   }
   btnSkills.addEventListener("click", () => setTab("skills"));
   btnInv.addEventListener("click", () => setTab("inv"));
 
-  function skillDisplayName(key) {
-    if (key === "hitpoints") return "Hitpoints";
-    return key.charAt(0).toUpperCase() + key.slice(1);
-  }
+  const skillDisplayName = (k) => (k === "hitpoints" ? "Hitpoints" : k.charAt(0).toUpperCase()+k.slice(1));
+  const iconForSkill = (k) => (k==="woodcutting"?"🪓":k==="fishing"?"🎣":k==="mining"?"⛏️":k==="cooking"?"🍳":k==="magic"?"✨":"★");
 
   function renderSkillsList() {
     skillsListEl.innerHTML = "";
-    const keys = SKILL_ORDER.map(s => s.toLowerCase());
-    for (const key of keys) {
+    for (const key of SKILL_ORDER.map(s=>s.toLowerCase())) {
       const sk = state.skills[key];
       const row = document.createElement("div");
-      row.className = "skillRow" + (state.ui.selectedSkill === key ? " active" : "");
-      row.addEventListener("click", () => {
-        state.ui.selectedSkill = key;
-        renderSkillsList();
-        renderSkillDetail();
-        saveState();
-      });
+      row.className = "skillRow" + (state.ui.selectedSkill===key?" active":"");
+      row.addEventListener("click", () => { state.ui.selectedSkill=key; renderSkillsList(); renderSkillDetail(); saveState(); });
 
-      const left = document.createElement("div");
-      left.className = "left";
-      const icon = document.createElement("div");
-      icon.className = "skillIcon";
-      icon.textContent = (key === "woodcutting") ? "🪓" :
-                         (key === "mining") ? "⛏️" :
-                         (key === "fishing") ? "🎣" :
-                         (key === "cooking") ? "🍳" :
-                         (key === "magic") ? "✨" :
-                         "★";
-      const name = document.createElement("div");
-      name.className = "skillNameTxt";
-      name.textContent = skillDisplayName(key);
-      left.appendChild(icon);
-      left.appendChild(name);
+      const left = document.createElement("div"); left.className="left";
+      const icon = document.createElement("div"); icon.className="skillIcon"; icon.textContent = iconForSkill(key);
+      const name = document.createElement("div"); name.className="skillNameTxt"; name.textContent = skillDisplayName(key);
+      left.append(icon,name);
 
-      const lvl = document.createElement("div");
-      lvl.className = "skillLvl";
-      lvl.textContent = "Lvl " + sk.lvl;
-
-      row.appendChild(left);
-      row.appendChild(lvl);
+      const lvl = document.createElement("div"); lvl.className="skillLvl"; lvl.textContent = "Lvl "+sk.lvl;
+      row.append(left,lvl);
       skillsListEl.appendChild(row);
     }
   }
@@ -297,62 +250,184 @@
     const pct = Math.max(0, Math.min(1, inLevel / denom));
 
     skillNameEl.textContent = skillDisplayName(key);
-    skillMetaEl.innerHTML = `
-      Level: <b>${sk.lvl}</b><br/>
-      XP: <b>${sk.xp}</b><br/>
-      XP to next: <b>${sk.lvl < 99 ? toNext : 0}</b>
-    `;
-    skillBarFillEl.style.width = (sk.lvl >= 99 ? 100 : pct * 100) + "%";
+    skillMetaEl.innerHTML = `Level: <b>${sk.lvl}</b><br/>XP: <b>${sk.xp}</b><br/>XP to next: <b>${sk.lvl<99?toNext:0}</b>`;
+    skillBarFillEl.style.width = (sk.lvl>=99?100:pct*100)+"%";
   }
 
-  function renderInventory() {
-    invGridEl.innerHTML = "";
-    invMetaEl.textContent = `Slots: ${invUsed()} / ${INVENTORY_CAPACITY}`;
-    coinsEl.textContent = `Coins: 🪙 ${state.inv.coins}`;
-
-    const slots = [];
-    for (const it of state.inv.items) slots.push(it);
-    while (slots.length < INVENTORY_CAPACITY) slots.push(null);
-
-    for (const it of slots) {
-      const wrap = document.createElement("div");
-      wrap.className = "invSlotWrap";
-      const slot = document.createElement("div");
-      slot.className = "invSlot" + (it ? "" : " empty");
+  function renderInventoryGrid(gridEl, items, capacity, onClick=null) {
+    gridEl.innerHTML = "";
+    const slots = [...items];
+    while (slots.length < capacity) slots.push(null);
+    for (const it of slots.slice(0, capacity)) {
+      const wrap = document.createElement("div"); wrap.className="invSlotWrap";
+      const slot = document.createElement("div"); slot.className="invSlot"+(it?"":" empty");
       slot.textContent = it ? (ITEM_DEFS[it]?.icon || "❓") : "·";
+      if (it && onClick) {
+        slot.style.cursor="pointer";
+        slot.addEventListener("click", () => onClick(it));
+      }
       wrap.appendChild(slot);
-      invGridEl.appendChild(wrap);
+      gridEl.appendChild(wrap);
     }
   }
 
-  function updateUI(contextText = "") {
-    contextEl.textContent = contextText || "";
-    if (performance.now() > msgUntil) msgEl.textContent = "";
-    if (state.ui.activeTab === "skills") { renderSkillsList(); renderSkillDetail(); }
-    if (state.ui.activeTab === "inv") { renderInventory(); }
+  function renderInvPanel() {
+    invMetaEl.textContent = `Slots: ${invUsed()} / ${INVENTORY_CAPACITY}`;
+    coinsEl.textContent = `Coins: 🪙 ${state.inv.coins}`;
+    renderInventoryGrid(invGridEl, state.inv.items, INVENTORY_CAPACITY, null);
   }
 
-  // restore tabs
-  const wantedTab = state.ui.activeTab;
-  state.ui.activeTab = null;
-  panelSkills.classList.add("hidden"); panelInv.classList.add("hidden");
-  btnSkills.classList.remove("active"); btnInv.classList.remove("active");
-  if (wantedTab === "skills") setTab("skills");
-  if (wantedTab === "inv") setTab("inv");
+  // Modal
+  function closeModal() {
+    state.ui.modal = null;
+    state.ui.modalNpcId = null;
+    modalOverlay.classList.add("hidden");
+    modalShopEl.classList.add("hidden");
+    modalSellEl.classList.add("hidden");
+    modalBankEl.classList.add("hidden");
+    saveState();
+    updateHUD();
+  }
 
-  // =========================
+  function openModal(kind, title, npcId) {
+    state.ui.modal = kind;
+    state.ui.modalNpcId = npcId;
+    modalTitleEl.textContent = title;
+    modalOverlay.classList.remove("hidden");
+    modalShopEl.classList.toggle("hidden", kind !== "shop");
+    modalSellEl.classList.toggle("hidden", kind !== "sell");
+    modalBankEl.classList.toggle("hidden", kind !== "bank");
+    renderModal();
+    saveState();
+  }
+
+  btnCloseModal.addEventListener("click", closeModal);
+  // tap outside card closes
+  modalOverlay.addEventListener("pointerdown", (e) => {
+    if (e.target === modalOverlay) closeModal();
+  });
+
+  function renderShop() {
+    shopListEl.innerHTML = "";
+    for (const s of SHOP_STOCK) {
+      const def = ITEM_DEFS[s.itemId];
+      const row = document.createElement("div"); row.className="shopItem";
+      const left = document.createElement("div"); left.className="shopLeft";
+      const icon = document.createElement("div"); icon.className="shopIcon"; icon.textContent=def.icon;
+      const txt = document.createElement("div"); txt.innerHTML = `<div class="shopName">${def.name}</div><div class="shopSub">${s.desc}</div>`;
+      left.append(icon,txt);
+
+      const btn = document.createElement("button"); btn.className="actionBtn"; btn.type="button";
+      btn.textContent = `Buy (${s.price} 🪙)`;
+      btn.disabled = (state.inv.coins < s.price) || (invFree() <= 0);
+      btn.addEventListener("click", () => {
+        if (invFree() <= 0) return setMsg("Inventory full");
+        if (!spendCoins(s.price)) return setMsg("Not enough coins");
+        addItemToInv(s.itemId);
+        setMsg(`Bought ${def.name}`);
+        renderModal(); renderInvPanel(); updateHUD(); saveState();
+      });
+
+      row.append(left,btn);
+      shopListEl.appendChild(row);
+    }
+  }
+
+  function renderSell(buysId) {
+    sellListEl.innerHTML = "";
+    const def = ITEM_DEFS[buysId];
+    const price = BUY_PRICES[buysId] ?? 0;
+    const count = state.inv.items.filter(x=>x===buysId).length;
+    sellInfoEl.textContent = `${def.icon} ${def.name} — ${price} coins each — You have ${count}`;
+
+    const row = document.createElement("div"); row.className="shopItem";
+    const left = document.createElement("div"); left.className="shopLeft";
+    const icon = document.createElement("div"); icon.className="shopIcon"; icon.textContent=def.icon;
+    const txt = document.createElement("div"); txt.innerHTML = `<div class="shopName">Sell ${def.name}</div><div class="shopSub">Sell 1 or Sell all.</div>`;
+    left.append(icon,txt);
+
+    const btn = document.createElement("button"); btn.className="actionBtn"; btn.type="button";
+    btn.textContent = `Sell 1 (+${price} 🪙)`;
+    btn.disabled = count <= 0;
+    btn.addEventListener("click", () => {
+      if (!removeOneFromInv(buysId)) return;
+      addCoins(price);
+      setMsg(`Sold 1 ${def.name}`);
+      renderModal(); renderInvPanel(); updateHUD(); saveState();
+    });
+
+    row.append(left,btn);
+    sellListEl.appendChild(row);
+
+    btnSellAll.onclick = () => {
+      const n = state.inv.items.filter(x=>x===buysId).length;
+      if (n <= 0) return setMsg("Nothing to sell");
+      state.inv.items = state.inv.items.filter(x=>x!==buysId);
+      addCoins(n*price);
+      setMsg(`Sold ${n} ${def.name}`);
+      renderModal(); renderInvPanel(); updateHUD(); saveState();
+    };
+  }
+
+  function renderBank() {
+    bankInvMetaEl.textContent = `Slots: ${invUsed()} / ${INVENTORY_CAPACITY}`;
+    bankMetaEl.textContent = `Items: ${state.bank.items.length} (showing ${BANK_VIEW_SLOTS})`;
+
+    renderInventoryGrid(bankInvGridEl, state.inv.items, INVENTORY_CAPACITY, (itemId) => {
+      if (!removeOneFromInv(itemId)) return;
+      addItemToBank(itemId);
+      setMsg(`Deposited ${ITEM_DEFS[itemId].name}`);
+      renderModal(); renderInvPanel(); updateHUD(); saveState();
+    });
+
+    renderInventoryGrid(bankGridEl, state.bank.items, BANK_VIEW_SLOTS, (itemId) => {
+      if (invFree() <= 0) return setMsg("Inventory full");
+      if (!removeOneFromBank(itemId)) return;
+      addItemToInv(itemId);
+      setMsg(`Withdrew ${ITEM_DEFS[itemId].name}`);
+      renderModal(); renderInvPanel(); updateHUD(); saveState();
+    });
+  }
+
+  function renderModal() {
+    if (!state.ui.modal) return;
+    if (state.ui.modal === "shop") renderShop();
+    if (state.ui.modal === "sell") {
+      const npc = getNpcById(state.ui.modalNpcId);
+      if (npc?.kind === "buyer_logs") renderSell("log");
+      if (npc?.kind === "buyer_fish") renderSell("fish");
+    }
+    if (state.ui.modal === "bank") renderBank();
+  }
+
+  function updateHUD() {
+    coinsHudEl.textContent = `🪙 ${state.inv.coins}`;
+    if (state.ui.activeTab === "skills") { renderSkillsList(); renderSkillDetail(); }
+    if (state.ui.activeTab === "inv") renderInvPanel();
+    if (state.ui.modal) renderModal();
+    // ensure overlay hidden state matches
+    modalOverlay.classList.toggle("hidden", !state.ui.modal);
+  }
+
+  // restore panels on boot
+  panelSkills.classList.add("hidden");
+  panelInv.classList.add("hidden");
+  btnSkills.classList.remove("active");
+  btnInv.classList.remove("active");
+  if (state.ui.activeTab === "skills") { state.ui.activeTab=null; setTab("skills"); }
+  if (state.ui.activeTab === "inv") { state.ui.activeTab=null; setTab("inv"); }
+  // don't restore modal automatically to avoid "stuck" UI
+  state.ui.modal = null; state.ui.modalNpcId = null;
+
   // Maps
-  // =========================
   function makeMap(w, h) {
-    return {
-      w, h,
+    return { w, h,
       tileType: Array.from({ length: h }, () => Array(w).fill(0)),
       heightMap: Array.from({ length: h }, () => Array(w).fill(0)),
       structures: [],
       doors: [],
       bushes: [],
-      npcs: [],
-      spots: [],
+      npcs: []
     };
   }
 
@@ -365,184 +440,125 @@
 
   function genOverworld() {
     const m = overworld;
+    for (let z=0; z<m.h; z++) for (let x=0; x<m.w; x++) {
+      const cx=m.w*0.46, cz=m.h*0.46;
+      const dx=(x-cx)/(m.w*0.65), dz=(z-cz)/(m.h*0.65);
+      const d=Math.sqrt(dx*dx+dz*dz);
+      const hill=Math.max(0,1.0-d);
+      let h=clamp(Math.floor(hill*4),0,4);
 
-    for (let z = 0; z < m.h; z++) for (let x = 0; x < m.w; x++) {
-      const cx = m.w * 0.46, cz = m.h * 0.46;
-      const dx = (x - cx) / (m.w * 0.65), dz = (z - cz) / (m.h * 0.65);
-      const d = Math.sqrt(dx*dx + dz*dz);
-      const hill = Math.max(0, 1.0 - d);
-      let h = clamp(Math.floor(hill * 4), 0, 4);
+      const lx=m.w*0.78, lz=m.h*0.32;
+      const ldx=(x-lx)/6.0, ldz=(z-lz)/5.0;
+      const lake=(ldx*ldx+ldz*ldz)<1.0;
 
-      const lx = m.w * 0.78, lz = m.h * 0.32;
-      const ldx = (x - lx) / 6.0, ldz = (z - lz) / 5.0;
-      const lake = (ldx*ldx + ldz*ldz) < 1.0;
-
-      if (lake) { m.tileType[z][x] = 2; m.heightMap[z][x] = 0; }
-      else {
-        m.heightMap[z][x] = h;
-        m.tileType[z][x] = (h >= 4) ? 1 : 0;
-      }
+      if(lake){ m.tileType[z][x]=2; m.heightMap[z][x]=0; }
+      else { m.heightMap[z][x]=h; m.tileType[z][x]=(h>=4)?1:0; }
     }
-
-    // border stone
-    for (let x = 0; x < m.w; x++) { m.tileType[0][x]=1; m.tileType[m.h-1][x]=1; m.heightMap[0][x]=0; m.heightMap[m.h-1][x]=0; }
-    for (let z = 0; z < m.h; z++) { m.tileType[z][0]=1; m.tileType[z][m.w-1]=1; m.heightMap[z][0]=0; m.heightMap[z][m.w-1]=0; }
+    for (let x=0; x<m.w; x++){ m.tileType[0][x]=1; m.tileType[m.h-1][x]=1; m.heightMap[0][x]=0; m.heightMap[m.h-1][x]=0; }
+    for (let z=0; z<m.h; z++){ m.tileType[z][0]=1; m.tileType[z][m.w-1]=1; m.heightMap[z][0]=0; m.heightMap[z][m.w-1]=0; }
 
     // village flat
-    const villageCenter = { x: 12, z: 12 };
-    for (let z = villageCenter.z-6; z <= villageCenter.z+6; z++) {
-      for (let x = villageCenter.x-6; x <= villageCenter.x+6; x++) {
-        if (!inBounds(m,x,z)) continue;
-        if (m.tileType[z][x] === 2) m.tileType[z][x] = 0;
-        m.heightMap[z][x] = 1;
-        m.tileType[z][x] = 0;
+    const vc={x:12,z:12};
+    for(let z=vc.z-6; z<=vc.z+6; z++){
+      for(let x=vc.x-6; x<=vc.x+6; x++){
+        if(!inBounds(m,x,z)) continue;
+        if(m.tileType[z][x]===2) m.tileType[z][x]=0;
+        m.heightMap[z][x]=1;
+        m.tileType[z][x]=0;
       }
     }
+    const setRoad=(x,z)=>{ if(!inBounds(m,x,z))return; m.tileType[z][x]=3; m.heightMap[z][x]=1; };
+    for(let x=6; x<=18; x++) setRoad(x,12);
+    for(let z=7; z<=18; z++) setRoad(12,z);
+    for(let x=18; x<m.w-1; x++) setRoad(x,12);
 
-    function setRoad(x,z){
-      if(!inBounds(m,x,z)) return;
-      m.tileType[z][x] = 3;
-      m.heightMap[z][x] = 1;
+    m.structures=[]; m.doors=[];
+    function addHouse(id,x0,z0,w,d,doorTx,doorTz,interiorId){
+      m.structures.push({id,x0,z0,w,d,doorTx,doorTz});
+      m.doors.push({ id:"door_"+id, kind:"enter", tx:doorTx, tz:doorTz, fromMap:"overworld", toMap:interiorId, returnTx:doorTx, returnTz:doorTz+1 });
     }
-    for (let x = 6; x <= 18; x++) setRoad(x, 12);
-    for (let z = 7; z <= 18; z++) setRoad(12, z);
-    for (let x = 18; x < m.w-1; x++) setRoad(x, 12); // to nowhere
+    addHouse("inn",10,9,5,4,12,13,"spawn_inn");
+    addHouse("house_1",6,9,4,3,8,12,"house_1");
+    addHouse("house_2",14,9,4,3,16,12,"house_2");
+    addHouse("house_3",7,14,4,3,9,17,"house_3");
+    addHouse("house_4",14,14,4,3,16,17,"house_4");
 
-    // buildings
-    m.structures = [];
-    m.doors = [];
-    function addHouse(id, x0, z0, w, d, doorTx, doorTz, interiorId) {
-      m.structures.push({ id, x0, z0, w, d, doorTx, doorTz });
-      m.doors.push({
-        id: "door_" + id,
-        kind: "enter",
-        tx: doorTx, tz: doorTz,
-        fromMap: "overworld",
-        toMap: interiorId,
-        returnTx: doorTx,
-        returnTz: doorTz + 1
-      });
-    }
-    addHouse("inn", 10, 9, 5, 4, 12, 13, "spawn_inn");
-    addHouse("house_1", 6, 9, 4, 3, 8, 12, "house_1");
-    addHouse("house_2", 14, 9, 4, 3, 16, 12, "house_2");
-    addHouse("house_3", 7, 14, 4, 3, 9, 17, "house_3");
-    addHouse("house_4", 14, 14, 4, 3, 16, 17, "house_4");
+    m.bushes=[{tx:9,tz:10},{tx:15,tz:10},{tx:10,tz:16},{tx:14,tz:16},{tx:6,tz:13},{tx:18,tz:13}];
 
-    m.bushes = [
-      { tx: 9, tz: 10 }, { tx: 15, tz: 10 }, { tx: 10, tz: 16 }, { tx: 14, tz: 16 },
-      { tx: 6, tz: 13 }, { tx: 18, tz: 13 }
-    ];
-
-    // NPCs in overworld
-    m.npcs = [
-      { id:"shop", tx: 12, tz: 11, name:"Tool Vendor", icon:"🛒", color:0xffd36b, kind:"shop" },
-      { id:"buy_logs", tx: 8, tz: 15, name:"Log Buyer", icon:"🪵", color:0x9ddcff, kind:"buyer", item:"log" },
-      { id:"buy_fish", tx: 16, tz: 15, name:"Fishmonger", icon:"🐟", color:0x8bf7c4, kind:"buyer", item:"fish" },
-    ];
-
-    // Fishing spots (near lake)
-    m.spots = [
-      { id:"spot1", tx: 25, tz: 11, icon:"🎣", kind:"fishspot" },
-      { id:"spot2", tx: 27, tz: 11, icon:"🎣", kind:"fishspot" },
-      { id:"spot3", tx: 26, tz: 13, icon:"🎣", kind:"fishspot" },
+    m.npcs=[
+      { id:"npc_shop", kind:"shop", name:"Tool Trader", tx:12, tz:11, icon:"🧰" },
+      { id:"npc_logbuyer", kind:"buyer_logs", name:"Lumber Buyer", tx:7, tz:16, icon:"🪵" },
+      { id:"npc_fishbuyer", kind:"buyer_fish", name:"Fishmonger", tx:23, tz:14, icon:"🐟" },
     ];
   }
   genOverworld();
 
-  // Interiors
   const interiors = {};
   function genInterior(id, title) {
     const m = makeMap(IN_W, IN_H);
-    for (let z=0; z<m.h; z++) for (let x=0; x<m.w; x++) {
-      m.tileType[z][x] = 4;
-      m.heightMap[z][x] = 0;
-    }
-    for (let x=0; x<m.w; x++) { m.tileType[0][x]=1; m.tileType[m.h-1][x]=1; }
-    for (let z=0; z<m.h; z++) { m.tileType[z][0]=1; m.tileType[z][m.w-1]=1; }
+    for(let z=0; z<m.h; z++) for(let x=0; x<m.w; x++){ m.tileType[z][x]=4; m.heightMap[z][x]=0; }
+    for(let x=0; x<m.w; x++){ m.tileType[0][x]=1; m.tileType[m.h-1][x]=1; }
+    for(let z=0; z<m.h; z++){ m.tileType[z][0]=1; m.tileType[z][m.w-1]=1; }
 
-    m.structures = [
-      { id: id+"_table", x0: 3, z0: 3, w: 2, d: 1, doorTx: -999, doorTz: -999 },
-    ];
+    m.structures=[{ id:id+"_table", x0:3, z0:3, w:2, d:1, doorTx:-999, doorTz:-999 }];
+    const doorTx=Math.floor(m.w/2), doorTz=m.h-2;
+    m.doors=[{ id:"exit_"+id, kind:"exit", tx:doorTx, tz:doorTz, fromMap:id, toMap:"overworld", returnTx:null, returnTz:null }];
 
-    const doorTx = Math.floor(m.w/2);
-    const doorTz = m.h - 2;
-    m.doors = [{
-      id: "exit_"+id,
-      kind: "exit",
-      tx: doorTx, tz: doorTz,
-      fromMap: id,
-      toMap: "overworld",
-      returnTx: null, returnTz: null
-    }];
+    m.npcs=[];
+    if(id==="spawn_inn") m.npcs.push({ id:"npc_banker", kind:"bank", name:"Banker", tx:3, tz:4, icon:"🏦" });
 
-    // Banker in spawn inn
-    m.npcs = [];
-    if (id === "spawn_inn") {
-      m.npcs.push({ id:"banker", tx: 6, tz: 3, name:"Banker", icon:"🏦", color:0xb3a1ff, kind:"bank" });
-    }
+    m.title=title;
+    interiors[id]=m;
+  }
+  ["spawn_inn","house_1","house_2","house_3","house_4"].forEach(id=>genInterior(id, id.replace("_"," ").toUpperCase()));
 
-    m.title = title;
-    interiors[id] = m;
+  // link exits
+  for (const d of overworld.doors) {
+    const interior = interiors[d.toMap];
+    if (!interior) continue;
+    const exitDoor = interior.doors.find(x=>x.kind==="exit");
+    if (exitDoor) { exitDoor.returnTx = d.returnTx; exitDoor.returnTz = d.returnTz; }
   }
 
-  ["spawn_inn","house_1","house_2","house_3","house_4"].forEach((id) => genInterior(id, id.replace("_"," ").toUpperCase()));
-  function linkInteriorExits() {
-    for (const d of overworld.doors) {
-      const interior = interiors[d.toMap];
-      if (!interior) continue;
-      const exitDoor = interior.doors.find(x => x.kind === "exit");
-      if (exitDoor) { exitDoor.returnTx = d.returnTx; exitDoor.returnTz = d.returnTz; }
-    }
-  }
-  linkInteriorExits();
+  const getMap = () => (state.map==="overworld"?overworld:(interiors[state.map]||overworld));
+  const getNpcById = (id) => (getMap().npcs||[]).find(n=>n.id===id) || null;
 
-  function getMap() { return state.map === "overworld" ? overworld : (interiors[state.map] || overworld); }
-
-  // =========================
-  // Solids / interact checks
-  // =========================
-  function treeAlive(t, now=performance.now()) { return now >= t.respawnAt; }
-  function stumpAlive(t, now=performance.now()) { return now < t.stumpUntil; }
+  // Solids
+  const treeAlive = (t, now=performance.now()) => now >= t.respawnAt;
+  const stumpAlive = (t, now=performance.now()) => now < t.stumpUntil;
 
   function isStructureSolid(m, tx, tz) {
     for (const s of m.structures) {
-      if (tx >= s.x0 && tx < s.x0 + s.w && tz >= s.z0 && tz < s.z0 + s.d) {
-        if (tx === s.doorTx && tz === s.doorTz) return false;
+      if (tx>=s.x0 && tx<s.x0+s.w && tz>=s.z0 && tz<s.z0+s.d) {
+        if (tx===s.doorTx && tz===s.doorTz) return false;
         return true;
       }
     }
     return false;
   }
-
+  function isNpcSolid(m, tx, tz) {
+    for (const n of (m.npcs||[])) if (n.tx===tx && n.tz===tz) return true;
+    return false;
+  }
   function isSolid(m, tx, tz) {
-    if (!inBounds(m, tx, tz)) return true;
+    if (!inBounds(m,tx,tz)) return true;
     const tt = m.tileType[tz][tx];
-    if (tt === 2) return true; // water
-    if (tt === 1 && state.map !== "overworld") return true; // interior walls
-    if (isStructureSolid(m, tx, tz)) return true;
-
-    // Trees & stumps solid
-    if (state.map === "overworld") {
+    if (tt===2) return true;
+    if (tt===1 && state.map!=="overworld") return true;
+    if (isStructureSolid(m,tx,tz)) return true;
+    if (isNpcSolid(m,tx,tz)) return true;
+    if (state.map==="overworld") {
       for (const tr of state.world.trees) {
-        if (tr.tx === tx && tr.tz === tz && (treeAlive(tr) || stumpAlive(tr))) return true;
+        if (tr.tx===tx && tr.tz===tz && (treeAlive(tr) || stumpAlive(tr))) return true;
       }
     }
-    // NPCs solid (so you can't walk through them)
-    for (const npc of (m.npcs || [])) {
-      if (npc.tx === tx && npc.tz === tz) return true;
-    }
-    // Fishing spots are not solid (stand next to them), so no solid there.
     return false;
   }
 
-  function findDoorAt(m, tx, tz) { return m.doors.find(d => d.tx === tx && d.tz === tz) || null; }
-  function findNpcAt(m, tx, tz) { return (m.npcs || []).find(n => n.tx === tx && n.tz === tz) || null; }
-  function findSpotAt(m, tx, tz) { return (m.spots || []).find(s => s.tx === tx && s.tz === tz) || null; }
+  const findDoorAt = (m,tx,tz)=>m.doors.find(d=>d.tx===tx&&d.tz===tz) || null;
+  const adj = (aTx,aTz,bTx,bTz)=>Math.abs(aTx-bTx)+Math.abs(aTz-bTz);
 
-  // =========================
-  // Three.js setup
-  // =========================
+  // Three.js
   const canvas = document.getElementById("game");
   const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
@@ -587,13 +603,7 @@
   const tileTopGeo = new THREE.BoxGeometry(TILE,0.08,TILE);
   const tileSideGeo = new THREE.BoxGeometry(TILE,LEVEL_H,TILE);
 
-  function matForTileType(tt) {
-    if (tt === 1) return mats.stone;
-    if (tt === 2) return mats.water;
-    if (tt === 3) return mats.road;
-    if (tt === 4) return mats.floor;
-    return mats.grass;
-  }
+  const matForTileType = (tt)=> tt===1?mats.stone:tt===2?mats.water:tt===3?mats.road:tt===4?mats.floor:mats.grass;
 
   const worldGroup = new THREE.Group();
   scene.add(worldGroup);
@@ -607,15 +617,12 @@
   let pickables = [];
   let doorPickables = [];
   let treePickables = [];
-  let spotPickables = [];
   let npcPickables = [];
+  let fishPickables = [];
   let stumpMeshes = new Map();
 
   // Marker
-  const marker = new THREE.Mesh(
-    new THREE.RingGeometry(0.14,0.26,28),
-    new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:0.7, side:THREE.DoubleSide })
-  );
+  const marker = new THREE.Mesh(new THREE.RingGeometry(0.14,0.26,28), new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:0.7, side:THREE.DoubleSide }));
   marker.rotation.x=-Math.PI/2;
   marker.visible=false;
   scene.add(marker);
@@ -629,20 +636,20 @@
   player.add(body,shadow);
   scene.add(player);
 
-  // Name tag sprite
-  function makeTextSprite(text, scaleX=3.8, scaleY=0.95) {
+  // Text sprite
+  function makeTextSprite(text, style={}) {
     const c = document.createElement("canvas");
     const ctx = c.getContext("2d");
-    c.width = 512; c.height = 128;
+    c.width = style.w ?? 512; c.height = style.h ?? 128;
     ctx.clearRect(0,0,c.width,c.height);
-    ctx.font = "bold 64px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.font = style.font || "bold 64px system-ui, -apple-system, Segoe UI, Roboto, Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.lineWidth = 12;
-    ctx.strokeStyle = "rgba(0,0,0,0.75)";
-    ctx.strokeText(text, 256, 64);
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.fillText(text, 256, 64);
+    ctx.lineWidth = style.outlineWidth ?? 12;
+    ctx.strokeStyle = style.outline ?? "rgba(0,0,0,0.75)";
+    ctx.strokeText(text, c.width/2, c.height/2);
+    ctx.fillStyle = style.fill ?? "rgba(255,255,255,0.95)";
+    ctx.fillText(text, c.width/2, c.height/2);
 
     const tex = new THREE.CanvasTexture(c);
     tex.minFilter = THREE.LinearFilter;
@@ -650,56 +657,46 @@
     tex.generateMipmaps = false;
 
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent:true }));
-    spr.scale.set(scaleX, scaleY, 1);
+    spr.scale.set(style.scaleX ?? 3.8, style.scaleY ?? 0.95, 1);
     return spr;
   }
-  const nameTag = makeTextSprite(username);
+  const nameTag = makeTextSprite(username, { scaleX: 3.8, scaleY: 0.95 });
   nameTag.position.set(0, 2.1, 0);
   player.add(nameTag);
 
   // XP popups
   const popupGroup = new THREE.Group();
   scene.add(popupGroup);
-
   function makePopupSprite(text) {
     const c = document.createElement("canvas");
     const ctx = c.getContext("2d");
-    c.width = 256; c.height = 128;
+    c.width = 320; c.height = 128;
     ctx.font = "bold 34px system-ui, -apple-system, Segoe UI, Roboto, Arial";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-
     ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillRect(22, 62, 12, 26);
-    ctx.beginPath(); ctx.arc(28, 52, 20, 0, Math.PI*2); ctx.fill();
-    ctx.fillText(text, 58, 64);
-
+    ctx.fillText(text, 14, 64);
     ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.fillRect(22, 62, 12, 26);
-    ctx.beginPath(); ctx.arc(28, 52, 20, 0, Math.PI*2); ctx.fill();
-    ctx.fillText(text, 58, 64);
+    ctx.fillText(text, 12, 62);
 
     const tex = new THREE.CanvasTexture(c);
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;
     tex.generateMipmaps = false;
 
-    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
-    const spr = new THREE.Sprite(mat);
-    spr.scale.set(2.4, 1.2, 1);
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent:true }));
+    spr.scale.set(2.9, 1.1, 1);
     return spr;
   }
-
-  function spawnPopup(text) {
-    const spr = makePopupSprite(text);
+  function spawnXpPopup(amount, icon) {
+    const spr = makePopupSprite(`${icon} +${amount} XP`);
     spr.position.copy(player.position);
-    spr.position.y += 1.8;
-    popupGroup.add(spr);
+    spr.position.y += 1.85;
     spr.userData = { start: performance.now(), life: 1100 };
+    popupGroup.add(spr);
   }
-
   function updatePopups(now) {
-    for (let i = popupGroup.children.length - 1; i >= 0; i--) {
+    for (let i=popupGroup.children.length-1; i>=0; i--) {
       const spr = popupGroup.children[i];
       const t = (now - spr.userData.start) / spr.userData.life;
       if (t >= 1) {
@@ -708,18 +705,18 @@
         if (spr.material) spr.material.dispose();
         continue;
       }
-      spr.position.y += 0.0025 * (1 + (1 - t) * 2);
+      spr.position.y += 0.0024 * (1 + (1 - t) * 2);
       spr.material.opacity = 1 - t;
     }
   }
 
-  // Mesh helpers
+  // Helpers
   function clearGroup(g) {
     while (g.children.length) {
       const c = g.children.pop();
       if (c.geometry) c.geometry.dispose?.();
       if (c.material) {
-        if (Array.isArray(c.material)) c.material.forEach(m => m.dispose?.());
+        if (Array.isArray(c.material)) c.material.forEach(m=>m.dispose?.());
         else c.material.dispose?.();
       }
     }
@@ -729,15 +726,13 @@
     const g = new THREE.Group();
     const foliageMat = new THREE.MeshStandardMaterial({ color:0x2f8a3a, roughness:1, metalness:0 });
     const trunkMat = new THREE.MeshStandardMaterial({ color:0x7a4a2a, roughness:1, metalness:0 });
-    const foliage = new THREE.Mesh(new THREE.SphereGeometry(0.55,18,14), foliageMat);
-    foliage.position.y = 1.15;
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.2,0.9,14), trunkMat);
-    trunk.position.y = 0.45;
-    g.add(foliage, trunk);
+    const foliage = new THREE.Mesh(new THREE.SphereGeometry(0.55,18,14), foliageMat); foliage.position.y=1.15;
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.2,0.9,14), trunkMat); trunk.position.y=0.45;
+    g.add(foliage,trunk);
     return g;
   }
 
-  function makeDoorModel() {
+  function makeDoorModel(labelText="DOOR") {
     const g = new THREE.Group();
     const frame = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.95, 0.14), mats.doorFrame);
     frame.position.y = 0.55;
@@ -746,119 +741,159 @@
     door.position.z = 0.03;
     const knob = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10), new THREE.MeshStandardMaterial({ color: 0xf2d56b, roughness:0.6, metalness:0.35 }));
     knob.position.set(0.22, 0.48, 0.08);
-    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.18, 0.06), new THREE.MeshStandardMaterial({ color: 0x9ddcff, roughness:0.9, metalness:0.0, emissive:0x133344 }));
-    sign.position.set(0, 0.95, 0.03);
-    g.add(frame, door, knob, sign);
+
+    // brighter sign for visibility
+    const sign = new THREE.Mesh(
+      new THREE.BoxGeometry(0.46, 0.20, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x9ddcff, roughness:0.6, metalness:0.05, emissive:0x1b3c55, emissiveIntensity: 0.85 })
+    );
+    sign.position.set(0, 0.97, 0.03);
+
+    const text = makeTextSprite(labelText, { w: 512, h: 128, font:"bold 56px system-ui", scaleX:1.8, scaleY:0.45, fill:"rgba(0,0,0,0.9)", outline:"rgba(0,0,0,0)" });
+    text.position.set(0, 0.97, 0.08);
+
+    g.add(frame, door, knob, sign, text);
     return g;
   }
 
   function makeNpcMesh(npc) {
     const g = new THREE.Group();
-    const npcMat = new THREE.MeshStandardMaterial({ color: npc.color ?? 0xffffff, roughness:1, metalness:0 });
-    const cap = new THREE.Mesh(new THREE.CapsuleGeometry(0.23,0.35,6,12), npcMat);
-    cap.position.y = 0.55;
+    const color =
+      npc.kind === "bank" ? 0x46c3ff :
+      npc.kind === "shop" ? 0xffc24a :
+      npc.kind === "buyer_logs" ? 0x7cd992 :
+      npc.kind === "buyer_fish" ? 0xff7aa8 :
+      0xbfd3ff;
 
-    // icon above head
-    const iconSpr = makeTextSprite(npc.icon || "?", 1.35, 0.55);
-    iconSpr.position.set(0, 1.65, 0);
+    const mat = new THREE.MeshStandardMaterial({ color, roughness:1, metalness:0 });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.35, 6, 12), mat);
+    body.position.y = 0.55;
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.26,0.26,0.08,18), new THREE.MeshStandardMaterial({ color: 0x2a3647, roughness:1, metalness:0 }));
+    base.position.y = 0.04;
+    g.add(base, body);
 
-    g.add(cap, iconSpr);
-    g.userData = { kind:"npc", id:npc.id, tx:npc.tx, tz:npc.tz };
+    const label = makeTextSprite(`${npc.icon} ${npc.name}`, { font:"bold 52px system-ui", scaleX:4.6, scaleY:0.9 });
+    label.position.set(0, 1.85, 0);
+    g.add(label);
+
+    g.userData = { kind:"npc", npcId: npc.id, tx: npc.tx, tz: npc.tz };
     return g;
   }
 
   function makeFishingSpotMesh(spot) {
     const g = new THREE.Group();
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.18, 0.30, 24),
-      new THREE.MeshBasicMaterial({ color:0x9ddcff, transparent:true, opacity:0.9, side:THREE.DoubleSide })
-    );
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.18,0.32,24), new THREE.MeshBasicMaterial({ color:0x9ddcff, transparent:true, opacity:0.75, side:THREE.DoubleSide }));
     ring.rotation.x = -Math.PI/2;
-    ring.position.y = 0.03;
-
-    const bob = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 10), new THREE.MeshStandardMaterial({ color:0xff6b8b, roughness:0.7, metalness:0.1 }));
-    bob.position.y = 0.12;
-
-    g.add(ring, bob);
-    g.userData = { kind:"spot", id:spot.id, tx:spot.tx, tz:spot.tz };
+    ring.position.y = 0.04;
+    const bobber = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 10), new THREE.MeshStandardMaterial({ color:0xff4a4a, roughness:0.8, metalness:0 }));
+    bobber.position.set(0.12, 0.12, -0.08);
+    const txt = makeTextSprite("🎣", { font:"bold 64px system-ui", scaleX:1.3, scaleY:0.8 });
+    txt.position.set(0, 0.65, 0);
+    g.add(ring, bobber, txt);
+    g.userData = { kind:"fishspot", spotId: spot.id, tx: spot.tx, tz: spot.tz };
     return g;
   }
 
   function placePlayerAtTile(tx,tz){
-    const m = getMap();
-    const p = tileToWorld(m, tx, tz);
-    player.position.set(p.x, tileY(m, tx, tz), p.z);
+    const m=getMap();
+    const p=tileToWorld(m,tx,tz);
+    player.position.set(p.x, tileY(m,tx,tz), p.z);
   }
 
   function rebuildWorld() {
     clearGroup(tileGroup); clearGroup(decoGroup); clearGroup(structureGroup); clearGroup(resourceGroup); clearGroup(npcGroup);
-    stumpMeshes = new Map();
-    pickables = []; doorPickables = []; treePickables = []; spotPickables = []; npcPickables = [];
+    pickables=[]; doorPickables=[]; treePickables=[]; npcPickables=[]; fishPickables=[]; stumpMeshes=new Map();
 
     const m = getMap();
 
     // Tiles
     for (let tz=0; tz<m.h; tz++) for (let tx=0; tx<m.w; tx++) {
-      const tt = m.tileType[tz][tx];
-      const y = tileY(m, tx, tz);
-      const pos = tileToWorld(m, tx, tz);
-      const levels = m.heightMap[tz][tx];
+      const tt=m.tileType[tz][tx];
+      const y=tileY(m,tx,tz);
+      const pos=tileToWorld(m,tx,tz);
+      const levels=m.heightMap[tz][tx];
 
       for (let i=0; i<levels; i++) {
-        const side = new THREE.Mesh(tileSideGeo, mats.side);
+        const side=new THREE.Mesh(tileSideGeo, mats.side);
         side.position.set(pos.x, i*LEVEL_H + LEVEL_H/2 - 0.04, pos.z);
         tileGroup.add(side);
       }
-
-      const top = new THREE.Mesh(tileTopGeo, matForTileType(tt));
+      const top=new THREE.Mesh(tileTopGeo, matForTileType(tt));
       top.position.set(pos.x, y+0.02, pos.z);
-      top.userData = { kind:"tile", tx, tz };
+      top.userData={ kind:"tile", tx, tz };
       tileGroup.add(top);
       pickables.push(top);
     }
 
-    // Structures + doors
+    // Structures (houses)
     for (const s of m.structures) {
-      const centerX = s.x0 + s.w/2 - 0.5;
-      const centerZ = s.z0 + s.d/2 - 0.5;
-      const wp = tileToWorld(m, centerX, centerZ);
-      const baseY = tileY(m, s.x0, s.z0);
+      const centerX=s.x0+s.w/2-0.5, centerZ=s.z0+s.d/2-0.5;
+      const wp=tileToWorld(m, centerX, centerZ);
+      const baseY=tileY(m, s.x0, s.z0);
       const isFurniture = (s.doorTx < 0);
-
       if (isFurniture) {
-        const box = new THREE.Mesh(new THREE.BoxGeometry(s.w*TILE, 0.45, s.d*TILE), mats.stone);
-        box.position.set(wp.x, baseY + 0.25, wp.z);
+        const box=new THREE.Mesh(new THREE.BoxGeometry(s.w*TILE,0.45,s.d*TILE), mats.stone);
+        box.position.set(wp.x, baseY+0.25, wp.z);
         structureGroup.add(box);
       } else {
-        const bodyM = new THREE.Mesh(new THREE.BoxGeometry(s.w*TILE, 1.2, s.d*TILE), mats.house);
-        bodyM.position.set(wp.x, baseY + 0.6, wp.z);
+        const bodyM=new THREE.Mesh(new THREE.BoxGeometry(s.w*TILE,1.2,s.d*TILE), mats.house);
+        bodyM.position.set(wp.x, baseY+0.6, wp.z);
         structureGroup.add(bodyM);
 
-        const roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(s.w,s.d)*0.65, 0.75, 4), mats.roof);
-        roof.position.set(wp.x, baseY + 1.35, wp.z);
-        roof.rotation.y = Math.PI/4;
+        const roof=new THREE.Mesh(new THREE.ConeGeometry(Math.max(s.w,s.d)*0.65,0.75,4), mats.roof);
+        roof.position.set(wp.x, baseY+1.35, wp.z);
+        roof.rotation.y=Math.PI/4;
         structureGroup.add(roof);
+      }
+    }
 
-        const dwp = tileToWorld(m, s.doorTx, s.doorTz);
-        const doorModel = makeDoorModel();
-        doorModel.position.set(dwp.x, tileY(m, s.doorTx, s.doorTz) + 0.05, dwp.z - 0.46);
-        doorModel.userData = { kind:"door", tx: s.doorTx, tz: s.doorTz };
-        structureGroup.add(doorModel);
-        doorPickables.push(doorModel);
+    // Doors: ALWAYS render a door model for each door in m.doors (fixes interior visibility)
+    for (const d of m.doors) {
+      const dwp = tileToWorld(m, d.tx, d.tz);
+      const label = (d.kind === "exit") ? "EXIT" : "DOOR";
+      const doorModel = makeDoorModel(label);
+
+      // Place at appropriate edge of tile so it looks like a doorway
+      const baseY = tileY(m, d.tx, d.tz) + 0.05;
+
+      let zOff = -0.46;
+      let rotY = 0;
+
+      if (state.map !== "overworld" && d.kind === "exit") {
+        // Interior exit is on the bottom wall; place on south edge
+        zOff = +0.46;
+        rotY = Math.PI;
+      }
+
+      doorModel.position.set(dwp.x, baseY, dwp.z + zOff);
+      doorModel.rotation.y = rotY;
+      doorModel.userData = { kind:"door", tx:d.tx, tz:d.tz };
+      structureGroup.add(doorModel);
+      doorPickables.push(doorModel);
+
+      // Extra: floor marker at interior door tile
+      if (state.map !== "overworld" && d.kind === "exit") {
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(0.22,0.34,26),
+          new THREE.MeshBasicMaterial({ color:0x9ddcff, transparent:true, opacity:0.75, side:THREE.DoubleSide })
+        );
+        ring.rotation.x = -Math.PI/2;
+        ring.position.set(dwp.x, tileY(m, d.tx, d.tz) + 0.03, dwp.z);
+        decoGroup.add(ring);
       }
     }
 
     // Bushes
     for (const b of m.bushes || []) {
-      const p = tileToWorld(m, b.tx, b.tz);
-      const y = tileY(m, b.tx, b.tz);
-      const bush = new THREE.Mesh(new THREE.SphereGeometry(0.38, 16, 12), mats.bush);
-      bush.position.set(p.x + 0.12, y + 0.35, p.z - 0.08);
+      const p=tileToWorld(m,b.tx,b.tz);
+      const y=tileY(m,b.tx,b.tz);
+      const bush=new THREE.Mesh(new THREE.SphereGeometry(0.38,16,12), mats.bush);
+      bush.position.set(p.x+0.12, y+0.35, p.z-0.08);
       decoGroup.add(bush);
     }
 
-    // Trees (overworld)
-    if (state.map === "overworld") {
+    // Trees / stumps / fishing in overworld
+    if (state.map==="overworld") {
       for (const tr of state.world.trees) {
         const tree = makeTreeMesh();
         tree.userData = { kind:"tree", treeId: tr.id, tx: tr.tx, tz: tr.tz };
@@ -871,114 +906,96 @@
         stumpMeshes.set(tr.id, stump);
       }
       syncTreesAndStumps();
-    }
 
-    // Fishing spots (overworld)
-    if (state.map === "overworld") {
-      for (const sp of (m.spots || [])) {
+      for (const sp of (state.world.fishingSpots||[])) {
         const mesh = makeFishingSpotMesh(sp);
-        const wp = tileToWorld(m, sp.tx, sp.tz);
-        mesh.position.set(wp.x, tileY(m, sp.tx, sp.tz), wp.z);
+        const wp = tileToWorld(overworld, sp.tx, sp.tz);
+        mesh.position.set(wp.x, tileY(overworld, sp.tx, sp.tz)+0.02, wp.z);
         npcGroup.add(mesh);
-        spotPickables.push(mesh);
+        fishPickables.push(mesh);
       }
     }
 
-    // NPCs (all maps)
+    // NPCs
     for (const npc of (m.npcs || [])) {
       const mesh = makeNpcMesh(npc);
-      const wp = tileToWorld(m, npc.tx, npc.tz);
-      mesh.position.set(wp.x, tileY(m, npc.tx, npc.tz), wp.z);
+      const wp=tileToWorld(m,npc.tx,npc.tz);
+      mesh.position.set(wp.x, tileY(m,npc.tx,npc.tz), wp.z);
       npcGroup.add(mesh);
       npcPickables.push(mesh);
     }
 
     placePlayerAtTile(state.player.tx, state.player.tz);
-    marker.visible = false;
+    marker.visible=false;
   }
 
   if (state.map !== "overworld" && !interiors[state.map]) state.map = "spawn_inn";
   rebuildWorld();
 
   function syncTreesAndStumps() {
-    if (state.map !== "overworld") return;
-    const m = overworld;
-    const now = performance.now();
+    if (state.map!=="overworld") return;
+    const m=overworld;
+    const now=performance.now();
     for (const treeObj of treePickables) {
-      const tr = state.world.trees.find(t => t.id === treeObj.userData.treeId);
-      if (!tr) continue;
-      const alive = treeAlive(tr, now);
-      const stumpOn = stumpAlive(tr, now);
-
-      const pos = tileToWorld(m, tr.tx, tr.tz);
-      const y = tileY(m, tr.tx, tr.tz);
-
-      treeObj.visible = alive;
-      treeObj.position.set(pos.x, y, pos.z);
-
-      const stump = stumpMeshes.get(tr.id);
+      const tr=state.world.trees.find(t=>t.id===treeObj.userData.treeId);
+      if(!tr) continue;
+      const alive=treeAlive(tr,now);
+      const stumpOn=stumpAlive(tr,now);
+      const pos=tileToWorld(m,tr.tx,tr.tz);
+      const y=tileY(m,tr.tx,tr.tz);
+      treeObj.visible=alive;
+      treeObj.position.set(pos.x,y,pos.z);
+      const stump=stumpMeshes.get(tr.id);
       if (stump) {
-        stump.visible = (!alive) && stumpOn;
-        stump.position.set(pos.x, y + 0.12, pos.z);
+        stump.visible=(!alive)&&stumpOn;
+        stump.position.set(pos.x,y+0.12,pos.z);
       }
     }
   }
 
-  // =========================
-  // Raycasting
-  // =========================
+  // Raycast
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
-
   function pickFromEvent(ev) {
-    const rect = renderer.domElement.getBoundingClientRect();
+    const rect=renderer.domElement.getBoundingClientRect();
     const x=(ev.clientX-rect.left)/rect.width;
     const y=(ev.clientY-rect.top)/rect.height;
     pointer.x = x*2-1;
     pointer.y = -(y*2-1);
     raycaster.setFromCamera(pointer, cam);
 
-    const objects = pickables.concat(doorPickables)
-      .concat(treePickables.filter(t=>t.visible))
-      .concat(spotPickables)
-      .concat(npcPickables);
-
+    const objects = pickables.concat(doorPickables).concat(treePickables.filter(t=>t.visible)).concat(npcPickables).concat(fishPickables);
     const hits = raycaster.intersectObjects(objects, true);
     if (!hits.length) return null;
 
     for (const h of hits) {
-      let cur = h.object;
-      while (cur && cur !== scene) {
-        if (cur.userData?.kind === "door") return { kind:"door", tx:cur.userData.tx, tz:cur.userData.tz };
-        if (cur.userData?.kind === "tree") return { kind:"tree", treeId:cur.userData.treeId, tx:cur.userData.tx, tz:cur.userData.tz };
-        if (cur.userData?.kind === "npc")  return { kind:"npc", id:cur.userData.id, tx:cur.userData.tx, tz:cur.userData.tz };
-        if (cur.userData?.kind === "spot") return { kind:"spot", id:cur.userData.id, tx:cur.userData.tx, tz:cur.userData.tz };
-        cur = cur.parent;
+      let cur=h.object;
+      while (cur && cur!==scene) {
+        if (cur.userData?.kind==="door") return { kind:"door", tx:cur.userData.tx, tz:cur.userData.tz };
+        if (cur.userData?.kind==="tree") return { kind:"tree", treeId:cur.userData.treeId, tx:cur.userData.tx, tz:cur.userData.tz };
+        if (cur.userData?.kind==="npc") return { kind:"npc", npcId:cur.userData.npcId, tx:cur.userData.tx, tz:cur.userData.tz };
+        if (cur.userData?.kind==="fishspot") return { kind:"fishspot", spotId:cur.userData.spotId, tx:cur.userData.tx, tz:cur.userData.tz };
+        cur=cur.parent;
       }
     }
-
     const hit = hits[0].object;
-    if (hit.userData?.kind === "tile") return { kind:"tile", tx: hit.userData.tx, tz: hit.userData.tz };
+    if (hit.userData?.kind==="tile") return { kind:"tile", tx:hit.userData.tx, tz:hit.userData.tz };
     return null;
   }
 
-  // =========================
-  // A* pathfinding
-  // =========================
+  // A*
   const key = (tx,tz)=>tx+","+tz;
   const heuristic = (a,b)=>Math.abs(a.tx-b.tx)+Math.abs(a.tz-b.tz);
-
-  function neighbors(m, n) {
+  function neighbors(m,n){
     return [
-      { tx:n.tx+1, tz:n.tz }, { tx:n.tx-1, tz:n.tz },
-      { tx:n.tx, tz:n.tz+1 }, { tx:n.tx, tz:n.tz-1 },
-    ].filter(p => inBounds(m,p.tx,p.tz) && !isSolid(m,p.tx,p.tz));
+      {tx:n.tx+1,tz:n.tz},{tx:n.tx-1,tz:n.tz},{tx:n.tx,tz:n.tz+1},{tx:n.tx,tz:n.tz-1},
+    ].filter(p=>inBounds(m,p.tx,p.tz) && !isSolid(m,p.tx,p.tz));
   }
-  function moveCost(m, a, b) {
-    const dh = m.heightMap[b.tz][b.tx] - m.heightMap[a.tz][a.tx];
-    return 1 + Math.max(0, dh) * 0.5;
+  function moveCost(m,a,b){
+    const dh=m.heightMap[b.tz][b.tx]-m.heightMap[a.tz][a.tx];
+    return 1 + Math.max(0,dh)*0.5;
   }
-  function astar(m, start, goal) {
+  function astar(m,start,goal){
     const sK=key(start.tx,start.tz), gK=key(goal.tx,goal.tz);
     const open=new Map([[sK,start]]);
     const came=new Map();
@@ -1018,461 +1035,205 @@
   }
 
   function setMoveGoal(goalTx, goalTz) {
-    const m = getMap();
-    if (isSolid(m, goalTx, goalTz)) { setMsg("Can't walk there"); return; }
-    const start = { tx: state.player.tx, tz: state.player.tz };
-    const goal = { tx: goalTx, tz: goalTz };
-    const path = astar(m, start, goal);
-    if (!path.length) { setMsg("No path"); return; }
-    state.path = path;
-    state.moveSeg = null;
-
-    marker.visible = true;
-    const wp = tileToWorld(m, goalTx, goalTz);
-    marker.position.set(wp.x, tileY(m, goalTx, goalTz) + 0.03, wp.z);
+    const m=getMap();
+    if (isSolid(m,goalTx,goalTz)) return setMsg("Can't walk there");
+    const path=astar(m,{tx:state.player.tx,tz:state.player.tz},{tx:goalTx,tz:goalTz});
+    if(!path.length) return setMsg("No path");
+    state.path=path;
+    state.moveSeg=null;
+    marker.visible=true;
+    const wp=tileToWorld(m,goalTx,goalTz);
+    marker.position.set(wp.x, tileY(m,goalTx,goalTz)+0.03, wp.z);
   }
 
-  function bestAdjacentStandTile(m, objTx, objTz) {
+  function bestAdjacent(m, tx, tz) {
     const opts = [
-      { tx: objTx+1, tz: objTz },
-      { tx: objTx-1, tz: objTz },
-      { tx: objTx, tz: objTz+1 },
-      { tx: objTx, tz: objTz-1 },
-    ].filter(p => inBounds(m,p.tx,p.tz) && !isSolid(m,p.tx,p.tz));
-    if (!opts.length) return null;
-    const px = state.player.tx, pz = state.player.tz;
-    opts.sort((a,b)=> (Math.abs(a.tx-px)+Math.abs(a.tz-pz)) - (Math.abs(a.tz-pz)+Math.abs(b.tz-pz)) );
+      {tx:tx+1,tz:tz},{tx:tx-1,tz:tz},{tx:tx,tz:tz+1},{tx:tx,tz:tz-1},
+    ].filter(p=>inBounds(m,p.tx,p.tz) && !isSolid(m,p.tx,p.tz));
+    if(!opts.length) return null;
+    const px=state.player.tx,pz=state.player.tz;
+    opts.sort((a,b)=> (Math.abs(a.tx-px)+Math.abs(a.tz-pz)) - (Math.abs(b.tx-px)+Math.abs(b.tz-pz)) );
     return opts[0];
   }
 
-  // =========================
   // Context action for E
-  // =========================
-  function adjacentManhattan(aTx,aTz,bTx,bTz){ return Math.abs(aTx-bTx)+Math.abs(aTz-bTz); }
-
   function getContextAction() {
-    const m = getMap();
+    const m=getMap();
+    if (state.ui.modal) return null; // don't show / interact while modal open
 
-    // NPC adjacent
-    for (const npc of (m.npcs || [])) {
-      if (adjacentManhattan(state.player.tx, state.player.tz, npc.tx, npc.tz) === 1) {
-        if (npc.kind === "shop") return { type:"npc_shop", npc, label:`Talk (${npc.name})` };
-        if (npc.kind === "bank") return { type:"npc_bank", npc, label:`Bank (${npc.name})` };
-        if (npc.kind === "buyer") return { type:"npc_buyer", npc, label:`Sell to ${npc.name}` };
+    for (const n of (m.npcs||[])) {
+      if (adj(state.player.tx,state.player.tz,n.tx,n.tz)===1) {
+        if (n.kind==="shop") return {type:"npc", npc:n, label:"Trade"};
+        if (n.kind==="bank") return {type:"npc", npc:n, label:"Bank"};
+        if (n.kind==="buyer_logs") return {type:"npc", npc:n, label:"Sell Logs"};
+        if (n.kind==="buyer_fish") return {type:"npc", npc:n, label:"Sell Fish"};
+        return {type:"npc", npc:n, label:"Talk"};
       }
     }
-
-    // Doors adjacent
     for (const d of m.doors) {
-      if (adjacentManhattan(state.player.tx, state.player.tz, d.tx, d.tz) === 1) {
-        return { type:"door", door:d, label:"Enter/Exit" };
-      }
+      if (adj(state.player.tx,state.player.tz,d.tx,d.tz)===1) return {type:"door", door:d, label:"Enter/Exit"};
     }
-
-    // Fishing spots adjacent (overworld)
-    if (state.map === "overworld") {
-      for (const sp of (m.spots || [])) {
-        if (adjacentManhattan(state.player.tx, state.player.tz, sp.tx, sp.tz) === 1) {
-          return { type:"fishspot", spot:sp, label:"Fish" };
-        }
+    if (state.map==="overworld") {
+      for (const sp of (state.world.fishingSpots||[])) {
+        if (adj(state.player.tx,state.player.tz,sp.tx,sp.tz)===1) return {type:"fish", spot:sp, label:"Fish"};
       }
-    }
-
-    // Trees adjacent
-    if (state.map === "overworld") {
-      const now = performance.now();
+      const now=performance.now();
       for (const tr of state.world.trees) {
-        if (!treeAlive(tr, now)) continue;
-        if (adjacentManhattan(state.player.tx, state.player.tz, tr.tx, tr.tz) === 1) {
-          return { type:"tree", tree:tr, label:"Chop Tree" };
-        }
+        if (!treeAlive(tr,now)) continue;
+        if (adj(state.player.tx,state.player.tz,tr.tx,tr.tz)===1) return {type:"tree", tree:tr, label:"Chop Tree"};
       }
     }
-
     return null;
   }
 
-  // =========================
-  // NPC interactions (modal)
-  // =========================
-  function shopModal(npc) {
-    const axeOwned = hasItem("axe");
-    const rodOwned = hasItem("fishingrod");
-    openModal(npc.name, `
-      <div class="row">
-        <div class="left"><div class="badge">🪓</div><div><b>${ITEM_DEFS.axe.name}</b><br/><span style="opacity:.85">Price: 🪙 ${SHOP_PRICES.axe}</span></div></div>
-        <button class="btn" id="buyAxe" ${axeOwned ? "disabled" : ""}>${axeOwned ? "Owned" : "Buy"}</button>
-      </div>
-      <div class="row">
-        <div class="left"><div class="badge">🎣</div><div><b>${ITEM_DEFS.fishingrod.name}</b><br/><span style="opacity:.85">Price: 🪙 ${SHOP_PRICES.fishingrod}</span></div></div>
-        <button class="btn" id="buyRod" ${rodOwned ? "disabled" : ""}>${rodOwned ? "Owned" : "Buy"}</button>
-      </div>
-      <div style="opacity:.85">Coins: 🪙 <b>${state.inv.coins}</b> • Free slots: <b>${invFree()}</b></div>
-    `);
-
-    const buyAxeBtn = document.getElementById("buyAxe");
-    if (buyAxeBtn) buyAxeBtn.addEventListener("click", () => {
-      if (hasItem("axe")) return;
-      if (invFree() <= 0) { setMsg("Inventory full"); return; }
-      if (!spendCoins(SHOP_PRICES.axe)) { setMsg("Not enough coins"); return; }
-      addItemToInv("axe");
-      setMsg("Bought an axe");
-      saveState();
-      shopModal(npc); // refresh modal
-      renderInventory();
-    });
-
-    const buyRodBtn = document.getElementById("buyRod");
-    if (buyRodBtn) buyRodBtn.addEventListener("click", () => {
-      if (hasItem("fishingrod")) return;
-      if (invFree() <= 0) { setMsg("Inventory full"); return; }
-      if (!spendCoins(SHOP_PRICES.fishingrod)) { setMsg("Not enough coins"); return; }
-      addItemToInv("fishingrod");
-      setMsg("Bought a fishing rod");
-      saveState();
-      shopModal(npc);
-      renderInventory();
-    });
-  }
-
-  function buyerModal(npc) {
-    const itemId = npc.item;
-    const price = BUY_PRICES[itemId] || 1;
-    const countInv = state.inv.items.filter(x => x === itemId).length;
-
-    openModal(npc.name, `
-      <div class="row">
-        <div class="left"><div class="badge">${ITEM_DEFS[itemId]?.icon || "❓"}</div>
-          <div><b>Sell ${ITEM_DEFS[itemId]?.name || itemId}</b><br/><span style="opacity:.85">Pays: 🪙 ${price} each</span></div>
-        </div>
-        <button class="btn" id="sellOne" ${countInv<=0 ? "disabled" : ""}>Sell 1</button>
-      </div>
-      <div class="row">
-        <div class="left"><div class="badge">🪙</div><div><b>Sell all</b><br/><span style="opacity:.85">You have: ${countInv}</span></div></div>
-        <button class="btn" id="sellAll" ${countInv<=0 ? "disabled" : ""}>Sell All</button>
-      </div>
-      <div style="opacity:.85">Coins: 🪙 <b>${state.inv.coins}</b></div>
-    `);
-
-    const sellOneBtn = document.getElementById("sellOne");
-    if (sellOneBtn) sellOneBtn.addEventListener("click", () => {
-      if (!removeOneItemFromInv(itemId)) return;
-      addCoins(price);
-      setMsg(`Sold 1 for ${price} coins`);
-      saveState();
-      buyerModal(npc);
-      renderInventory();
-    });
-
-    const sellAllBtn = document.getElementById("sellAll");
-    if (sellAllBtn) sellAllBtn.addEventListener("click", () => {
-      let sold = 0;
-      while (removeOneItemFromInv(itemId)) { sold++; }
-      if (sold > 0) addCoins(price * sold);
-      setMsg(`Sold ${sold}`);
-      saveState();
-      buyerModal(npc);
-      renderInventory();
-    });
-  }
-
-  function bankModal(npc) {
-    // show bank and inventory icons; tap bank icon to withdraw; tap inv icon to deposit
-    function countBy(arr) {
-      const m = new Map();
-      for (const it of arr) m.set(it, (m.get(it) || 0) + 1);
-      return m;
-    }
-    const invCounts = countBy(state.inv.items);
-    const bankCounts = countBy(state.bank.items);
-
-    // Build grids (stack display - still stored as singles, but show with counts)
-    function gridHtml(countMap, emptyCount, idPrefix) {
-      const entries = [...countMap.entries()];
-      let html = `<div class="bankGrid">`;
-      for (const [itemId, cnt] of entries) {
-        const icon = ITEM_DEFS[itemId]?.icon || "❓";
-        html += `<div class="bankSlot" data-item="${itemId}" data-prefix="${idPrefix}" title="${ITEM_DEFS[itemId]?.name || itemId}">${icon}<span style="position:absolute;right:7px;bottom:6px;font-size:12px;font-weight:900;opacity:.9">${cnt}</span></div>`;
-      }
-      for (let i=0;i<emptyCount;i++) html += `<div class="bankSlot empty">·</div>`;
-      html += `</div>`;
-      return html;
-    }
-
-    const invUnique = [...invCounts.keys()].length;
-    const bankUnique = [...bankCounts.keys()].length;
-
-    openModal(npc.name, `
-      <div style="opacity:.9;margin-bottom:10px">Tap an item to move <b>1</b> between Inventory ⇄ Bank.</div>
-      <div class="row" style="margin-bottom:12px">
-        <div class="left"><div class="badge">🎒</div><div><b>Inventory</b><br/><span style="opacity:.85">Slots ${invUsed()}/${INVENTORY_CAPACITY}</span></div></div>
-        <button class="btn" id="depositAll" ${invUsed()===0 ? "disabled" : ""}>Deposit All</button>
-      </div>
-      ${gridHtml(invCounts, Math.max(0, 12-invUnique), "inv")}
-      <div class="row" style="margin-top:12px;margin-bottom:12px">
-        <div class="left"><div class="badge">🏦</div><div><b>Bank</b><br/><span style="opacity:.85">${state.bank.items.length} items stored</span></div></div>
-        <button class="btn" id="withdrawAll" ${state.bank.items.length===0 ? "disabled" : ""}>Withdraw All</button>
-      </div>
-      ${gridHtml(bankCounts, Math.max(0, 12-bankUnique), "bank")}
-      <div style="opacity:.85;margin-top:10px">Coins are always carried: 🪙 <b>${state.inv.coins}</b></div>
-    `);
-
-    // deposit all (except coins)
-    const depAll = document.getElementById("depositAll");
-    if (depAll) depAll.addEventListener("click", () => {
-      // move everything from inv to bank (except leave nothing)
-      while (state.inv.items.length) {
-        const it = state.inv.items.pop();
-        addItemToBank(it);
-      }
-      setMsg("Deposited all");
-      saveState();
-      bankModal(npc);
-      renderInventory();
-    });
-
-    // withdraw all (until inventory full)
-    const wdAll = document.getElementById("withdrawAll");
-    if (wdAll) wdAll.addEventListener("click", () => {
-      let moved = 0;
-      // try moving items until full or empty
-      while (state.bank.items.length && invFree() > 0) {
-        const it = state.bank.items.pop();
-        addItemToInv(it);
-        moved++;
-      }
-      if (state.bank.items.length && invFree() === 0) setMsg("Inventory full");
-      else setMsg(`Withdrew ${moved}`);
-      saveState();
-      bankModal(npc);
-      renderInventory();
-    });
-
-    // item click handlers
-    modalBodyEl.querySelectorAll(".bankSlot[data-item]").forEach(el => {
-      el.addEventListener("click", () => {
-        const itemId = el.getAttribute("data-item");
-        const prefix = el.getAttribute("data-prefix");
-        if (!itemId) return;
-
-        if (prefix === "inv") {
-          // deposit 1
-          if (removeOneItemFromInv(itemId)) {
-            addItemToBank(itemId);
-            setMsg("Deposited 1");
-            saveState();
-            bankModal(npc);
-            renderInventory();
-          }
-        } else {
-          // withdraw 1
-          if (invFree() <= 0) { setMsg("Inventory full"); return; }
-          if (removeOneItemFromBank(itemId)) {
-            addItemToInv(itemId);
-            setMsg("Withdrew 1");
-            saveState();
-            bankModal(npc);
-            renderInventory();
-          }
-        }
-      });
-    });
-  }
-
-  function openNpc(npc) {
-    if (npc.kind === "shop") shopModal(npc);
-    if (npc.kind === "buyer") buyerModal(npc);
-    if (npc.kind === "bank") bankModal(npc);
-  }
-
-  // =========================
-  // Actions (chop/fish)
-  // =========================
-  function addXp(skillKey, amount) {
-    const sk = state.skills[skillKey];
-    sk.xp += amount;
-    while (sk.lvl < 99 && sk.xp >= xpForLevel(sk.lvl + 1)) {
-      sk.lvl++;
-      addCoins(1);
-    }
-  }
-
-  function finishAction() {
-    const now = performance.now();
-    const a = state.action;
-    state.action = null;
-    if (!a) return;
-
-    if (a.type === "chop") {
-      const tr = state.world.trees.find(t => t.id === a.id);
-      if (!tr) return;
-
-      // Needs axe
-      if (!hasItem("axe")) { setMsg("You need an axe"); return; }
-
-      // reward
-      const ok = addItemToInv("log");
-      if (!ok) setMsg("Inventory full");
-      else setMsg("You get some logs");
-
-      addXp("woodcutting", XP_CHOP);
-      spawnPopup(`+${XP_CHOP} XP`);
-
-      tr.respawnAt = now + TREE_RESPAWN_MS;
-      tr.stumpUntil = tr.respawnAt;
-      saveState();
-      return;
-    }
-
-    if (a.type === "fish") {
-      if (!hasItem("fishingrod")) { setMsg("You need a fishing rod"); return; }
-
-      const sp = state.world.fishingSpots.find(s => s.id === a.id);
-      if (!sp) return;
-
-      // reward
-      const ok = addItemToInv("fish");
-      if (!ok) setMsg("Inventory full");
-      else setMsg("You catch a fish");
-
-      addXp("fishing", XP_FISH);
-      spawnPopup(`+${XP_FISH} XP`);
-
-      sp.respawnAt = now + FISH_RESPAWN_MS;
-      saveState();
-      return;
-    }
-  }
-
-  // =========================
-  // Contextual interaction (E)
-  // =========================
   function doInteract() {
-    if (state.action) { setMsg("Busy..."); return; }
-    if (!modalEl.classList.contains("hidden")) { closeModal(); return; } // E closes modal if open
+    if (state.action) return setMsg("Busy...");
+    if (state.ui.modal) return; // modal uses X / tap outside
 
-    const ctx = getContextAction();
-    if (!ctx) { setMsg("Nothing to interact with"); return; }
+    const ctx=getContextAction();
+    if(!ctx) return setMsg("Nothing to interact with");
 
-    if (ctx.type === "npc_shop" || ctx.type === "npc_buyer" || ctx.type === "npc_bank") {
-      openNpc(ctx.npc);
+    if(ctx.type==="npc"){
+      const n=ctx.npc;
+      if(n.kind==="shop") openModal("shop","Tool Trader",n.id);
+      if(n.kind==="bank") openModal("bank","Bank",n.id);
+      if(n.kind==="buyer_logs") openModal("sell","Lumber Buyer",n.id);
+      if(n.kind==="buyer_fish") openModal("sell","Fishmonger",n.id);
       return;
     }
-
-    if (ctx.type === "door") {
+    if(ctx.type==="door"){
       setMoveGoal(ctx.door.tx, ctx.door.tz);
       state.pendingDoor = { doorId: ctx.door.id };
-      setMsg("Entering...");
-      return;
+      return setMsg("Entering...");
     }
-
-    if (ctx.type === "fishspot") {
-      // stand still and fish (spot not solid, so you stay adjacent)
-      const now = performance.now();
-      // tie to persistent spots list in state.world
-      const sp = state.world.fishingSpots.find(s => s.tx === ctx.spot.tx && s.tz === ctx.spot.tz) || state.world.fishingSpots.find(s => s.id === ctx.spot.id);
-      if (!sp) { setMsg("No spot"); return; }
-      if (now < (sp.respawnAt || 0)) { setMsg("Nothing biting..."); return; }
-      state.path = []; state.moveSeg = null;
-      state.action = { type:"fish", endAt: now + FISH_TIME_MS, id: sp.id };
-      setMsg("Fishing...");
-      return;
+    if(ctx.type==="tree"){
+      if(!hasItem("axe")) return setMsg("You need an Axe");
+      state.path=[]; state.moveSeg=null;
+      state.action = { kind:"chop", endAt: performance.now()+CHOP_TIME_MS, targetId: ctx.tree.id };
+      return setMsg("Chopping...");
     }
-
-    if (ctx.type === "tree") {
-      // require axe to start
-      if (!hasItem("axe")) { setMsg("You need an axe (buy one at the stall)"); return; }
-      const now = performance.now();
-      state.path = []; state.moveSeg = null;
-      state.action = { type:"chop", endAt: now + CHOP_TIME_MS, id: ctx.tree.id };
-      setMsg("Chopping...");
-      return;
+    if(ctx.type==="fish"){
+      if(!hasItem("rod")) return setMsg("You need a Fishing Rod");
+      state.path=[]; state.moveSeg=null;
+      state.action = { kind:"fish", endAt: performance.now()+FISH_TIME_MS, targetId: ctx.spot.id };
+      return setMsg("Fishing...");
     }
   }
 
-  // =========================
-  // Click/tap interactions
-  // =========================
+  // Pointer down
   renderer.domElement.addEventListener("pointerdown", (ev) => {
-    if (state.action) { setMsg("Busy..."); return; }
-    const hit = pickFromEvent(ev);
-    if (!hit) return;
+    if (state.action) return setMsg("Busy...");
+    if (state.ui.modal) return; // don't click world through modal
 
-    const m = getMap();
+    const hit=pickFromEvent(ev);
+    if(!hit) return;
+    const m=getMap();
 
-    if (hit.kind === "npc") {
-      const npc = findNpcAt(m, hit.tx, hit.tz);
-      if (!npc) return;
-      const stand = bestAdjacentStandTile(m, npc.tx, npc.tz);
-      if (!stand) { setMsg("Can't reach"); return; }
+    if(hit.kind==="npc"){
+      const npc=(m.npcs||[]).find(n=>n.id===hit.npcId);
+      if(!npc) return;
+      const stand=bestAdjacent(m,npc.tx,npc.tz);
+      if(!stand) return setMsg("Can't reach");
       setMoveGoal(stand.tx, stand.tz);
-      state.pendingNpc = { id: npc.id };
-      setMsg("Approaching...");
-      return;
+      state.pendingNpc = { npcId: npc.id };
+      return setMsg("Approaching...");
     }
 
-    if (hit.kind === "door") {
-      const door = findDoorAt(m, hit.tx, hit.tz);
-      if (!door) return;
+    if(hit.kind==="door"){
+      const door=findDoorAt(m, hit.tx, hit.tz);
+      if(!door) return;
       setMoveGoal(hit.tx, hit.tz);
       state.pendingDoor = { doorId: door.id };
-      setMsg("Entering...");
-      return;
+      return setMsg("Entering...");
     }
 
-    if (hit.kind === "tree" && state.map === "overworld") {
-      const tr = state.world.trees.find(t => t.id === hit.treeId);
-      if (!tr || !treeAlive(tr)) { setMsg("No tree"); return; }
-      const stand = bestAdjacentStandTile(m, tr.tx, tr.tz);
-      if (!stand) { setMsg("Can't reach tree"); return; }
+    if(hit.kind==="fishspot"){
+      const sp=(state.world.fishingSpots||[]).find(s=>s.id===hit.spotId) || (state.world.fishingSpots||[]).find(s=>s.tx===hit.tx&&s.tz===hit.tz);
+      if(!sp) return;
+      const stand=bestAdjacent(overworld, sp.tx, sp.tz);
+      if(!stand) return setMsg("Can't reach");
       setMoveGoal(stand.tx, stand.tz);
-      setMsg("Walk to tree");
-      return;
+      return setMsg("Walk to fishing spot");
     }
 
-    if (hit.kind === "spot" && state.map === "overworld") {
-      const sp = (m.spots || []).find(s => s.id === hit.id && s.tx === hit.tx && s.tz === hit.tz) || (m.spots || []).find(s => s.tx === hit.tx && s.tz === hit.tz);
-      if (!sp) return;
-      const stand = bestAdjacentStandTile(m, sp.tx, sp.tz);
-      if (!stand) { setMsg("Can't reach spot"); return; }
+    if(hit.kind==="tree" && state.map==="overworld"){
+      const tr=state.world.trees.find(t=>t.id===hit.treeId);
+      if(!tr || !treeAlive(tr)) return setMsg("No tree");
+      const stand=bestAdjacent(m, tr.tx, tr.tz);
+      if(!stand) return setMsg("Can't reach tree");
       setMoveGoal(stand.tx, stand.tz);
-      setMsg("Walk to fishing spot");
-      return;
+      return setMsg("Walk to tree");
     }
 
-    if (hit.kind === "tile") {
-      if (isSolid(m, hit.tx, hit.tz)) { setMsg("Can't walk there"); return; }
+    if(hit.kind==="tile"){
+      if(isSolid(m, hit.tx, hit.tz)) return setMsg("Can't walk there");
       setMoveGoal(hit.tx, hit.tz);
     }
   });
 
-  // Keys
+  // Keyboard
   window.addEventListener("keydown", (e) => {
-    const k = e.key.toLowerCase();
-    if (k === "e") doInteract();
-    if (k === "r") {
+    const k=e.key.toLowerCase();
+    if(k==="e") doInteract();
+    if(k==="escape") closeModal();
+    if(k==="r"){
       localStorage.removeItem(SAVE_KEY);
-      state = defaultState();
+      state=defaultState();
+      closeModal();
       rebuildWorld();
       setMsg("Reset");
-      updateUI();
+      updateHUD();
     }
   });
 
-  // =========================
-  // Door transitions
-  // =========================
-  function checkDoorArrival() {
-    if (!state.pendingDoor) return;
-    const m = getMap();
-    const door = m.doors.find(d => d.id === state.pendingDoor.doorId);
-    if (!door) { state.pendingDoor = null; return; }
+  // Actions
+  function addXp(skillKey, amount) {
+    const sk=state.skills[skillKey];
+    sk.xp += amount;
+    while (sk.lvl < 99 && sk.xp >= xpForLevel(sk.lvl+1)) { sk.lvl++; addCoins(1); }
+  }
 
-    if (state.player.tx === door.tx && state.player.tz === door.tz) {
-      if (door.kind === "enter") {
+  function finishChop() {
+    const now=performance.now();
+    const tr=state.world.trees.find(t=>t.id===state.action.targetId);
+    state.action=null;
+    if(!tr) return;
+
+    const added=addItemToInv("log");
+    setMsg(added ? "You get some logs" : "Inventory full (log dropped)");
+    addXp("woodcutting", XP_CHOP);
+    spawnXpPopup(XP_CHOP, "🪵");
+    if(Math.random()<0.35) addCoins(1);
+
+    tr.respawnAt = now + TREE_RESPAWN_MS;
+    tr.stumpUntil = tr.respawnAt;
+
+    saveState(); updateHUD();
+  }
+
+  function finishFish() {
+    state.action=null;
+    const added=addItemToInv("fish");
+    setMsg(added ? "You catch a fish" : "Inventory full (fish dropped)");
+    addXp("fishing", XP_FISH);
+    spawnXpPopup(XP_FISH, "🐟");
+    if(Math.random()<0.25) addCoins(1);
+
+    saveState(); updateHUD();
+  }
+
+  // Arrival triggers
+  function checkDoorArrival() {
+    if(!state.pendingDoor) return;
+    const m=getMap();
+    const door=m.doors.find(d=>d.id===state.pendingDoor.doorId);
+    if(!door){ state.pendingDoor=null; return; }
+
+    if(state.player.tx===door.tx && state.player.tz===door.tz){
+      if(door.kind==="enter"){
         state.map = door.toMap;
-        const interior = interiors[state.map];
-        const exitDoor = interior.doors.find(x => x.kind === "exit");
+        const interior=interiors[state.map];
+        const exitDoor=interior.doors.find(x=>x.kind==="exit");
         state.player.tx = exitDoor.tx;
         state.player.tz = exitDoor.tz - 1;
       } else {
@@ -1480,88 +1241,85 @@
         state.player.tx = door.returnTx ?? 12;
         state.player.tz = door.returnTz ?? 14;
       }
-
-      state.path = [];
-      state.moveSeg = null;
-      state.pendingDoor = null;
+      state.path=[]; state.moveSeg=null; state.pendingDoor=null;
       rebuildWorld();
       setMsg("Welcome");
-      saveState();
+      saveState(); updateHUD();
     }
   }
 
   function checkNpcArrival() {
-    if (!state.pendingNpc) return;
-    const m = getMap();
-    const npc = (m.npcs || []).find(n => n.id === state.pendingNpc.id);
-    if (!npc) { state.pendingNpc = null; return; }
-    if (adjacentManhattan(state.player.tx, state.player.tz, npc.tx, npc.tz) === 1) {
-      state.pendingNpc = null;
-      openNpc(npc);
+    if(!state.pendingNpc) return;
+    const m=getMap();
+    const npc=(m.npcs||[]).find(n=>n.id===state.pendingNpc.npcId);
+    if(!npc){ state.pendingNpc=null; return; }
+    if(adj(state.player.tx,state.player.tz,npc.tx,npc.tz)===1){
+      if(npc.kind==="shop") openModal("shop","Tool Trader",npc.id);
+      if(npc.kind==="bank") openModal("bank","Bank",npc.id);
+      if(npc.kind==="buyer_logs") openModal("sell","Lumber Buyer",npc.id);
+      if(npc.kind==="buyer_fish") openModal("sell","Fishmonger",npc.id);
+      state.pendingNpc=null;
+      updateHUD();
     }
   }
 
-  // =========================
   // Movement
-  // =========================
   function startNextSegment() {
-    if (!state.path.length) return;
-    const next = state.path[0];
-    state.moveSeg = { from:{tx:state.player.tx,tz:state.player.tz}, to:{tx:next.tx,tz:next.tz}, t:0 };
+    if(!state.path.length) return;
+    const next=state.path[0];
+    state.moveSeg={ from:{tx:state.player.tx,tz:state.player.tz}, to:{tx:next.tx,tz:next.tz}, t:0 };
   }
 
   function stepMovement(dt) {
-    if (state.action) return;
-    if (!state.moveSeg) {
-      if (!state.path.length) return;
+    if(state.action) return;
+    if(!state.moveSeg){
+      if(!state.path.length) return;
       startNextSegment();
-      if (!state.moveSeg) return;
+      if(!state.moveSeg) return;
     }
-
-    const seg = state.moveSeg;
+    const seg=state.moveSeg;
     seg.t += state.player.speedTilesPerSec * dt;
-    const t = Math.min(1, seg.t);
+    const t=Math.min(1, seg.t);
 
-    const m = getMap();
-    const a = tileToWorld(m, seg.from.tx, seg.from.tz);
-    const b = tileToWorld(m, seg.to.tx, seg.to.tz);
-    const ay = tileY(m, seg.from.tx, seg.from.tz);
-    const by = tileY(m, seg.to.tx, seg.to.tz);
+    const m=getMap();
+    const a=tileToWorld(m, seg.from.tx, seg.from.tz);
+    const b=tileToWorld(m, seg.to.tx, seg.to.tz);
+    const ay=tileY(m, seg.from.tx, seg.from.tz);
+    const by=tileY(m, seg.to.tx, seg.to.tz);
 
     player.position.x = a.x + (b.x-a.x)*t;
     player.position.z = a.z + (b.z-a.z)*t;
     player.position.y = ay + (by-ay)*t;
 
     const dx=(b.x-a.x), dz=(b.z-a.z);
-    if (Math.abs(dx)+Math.abs(dz)>1e-6) player.rotation.y = Math.atan2(dx,dz);
+    if(Math.abs(dx)+Math.abs(dz)>1e-6) player.rotation.y = Math.atan2(dx,dz);
 
-    if (seg.t >= 1) {
-      state.player.tx = seg.to.tx;
-      state.player.tz = seg.to.tz;
+    if(seg.t>=1){
+      state.player.tx=seg.to.tx;
+      state.player.tz=seg.to.tz;
       state.path.shift();
-      if (!state.path.length) { state.moveSeg = null; marker.visible = false; }
-      else state.moveSeg = null;
+      state.moveSeg=null;
+      if(!state.path.length) marker.visible=false;
 
       checkDoorArrival();
       checkNpcArrival();
     }
   }
 
-  // Animations
-  const baseBodyY = body.position.y;
+  // Action animation
+  const baseBodyY=body.position.y;
   function animateAction(now) {
-    if (!state.action) { body.position.y = baseBodyY; return; }
-    const duration = (state.action.type === "fish") ? FISH_TIME_MS : CHOP_TIME_MS;
-    const phase = (state.action.endAt - now) / duration;
-    const s = Math.max(0, Math.min(1, 1 - phase));
-    body.position.y = baseBodyY + Math.sin(s * Math.PI * 4) * 0.03;
-    player.rotation.y += 0.04;
+    if(!state.action){ body.position.y=baseBodyY; return; }
+    const total = state.action.kind==="fish" ? FISH_TIME_MS : CHOP_TIME_MS;
+    const s = Math.max(0, Math.min(1, 1 - (state.action.endAt - now)/total));
+    body.position.y = baseBodyY + Math.sin(s*Math.PI*4)*0.03;
+    player.rotation.y += (state.action.kind==="fish")?0.04:0.06;
   }
 
   function updateCamera() {
-    const pos = player.position;
-    const follow = new THREE.Vector3(pos.x, pos.y, pos.z);
-    const offset = new THREE.Vector3(14,14,14);
+    const pos=player.position;
+    const follow=new THREE.Vector3(pos.x,pos.y,pos.z);
+    const offset=new THREE.Vector3(14,14,14);
     cam.position.copy(follow).add(offset);
     cam.rotation.order="YXZ";
     cam.rotation.y=Math.PI/4;
@@ -1569,52 +1327,36 @@
     cam.lookAt(follow);
   }
 
-  // =========================
   // Main loop
-  // =========================
-  let last = performance.now();
-  function tick(now) {
-    const dt = Math.min(0.033, (now - last) / 1000);
-    last = now;
+  let last=performance.now();
+  function tick(now){
+    const dt=Math.min(0.033,(now-last)/1000);
+    last=now;
 
-    if (state.action && now >= state.action.endAt) finishAction();
+    if(state.action && now>=state.action.endAt){
+      if(state.action.kind==="chop") finishChop();
+      if(state.action.kind==="fish") finishFish();
+    }
 
     stepMovement(dt);
     animateAction(now);
-    if (state.map === "overworld") syncTreesAndStumps();
+    if(state.map==="overworld") syncTreesAndStumps();
     updatePopups(now);
 
-    const ctx = getContextAction();
-    const ctxText = ctx ? `E to ${ctx.label}` : "";
-    updateUI(ctxText);
+    const ctx=getContextAction();
+    contextEl.textContent = ctx ? `E to ${ctx.label}` : "";
+    if(performance.now()>msgUntil) msgEl.textContent="";
 
+    updateHUD();
     updateCamera();
-    renderer.render(scene, cam);
-
+    renderer.render(scene,cam);
     requestAnimationFrame(tick);
   }
 
-  function updatePopups(now){ updatePopupsImpl(now); }
-  function updatePopupsImpl(now){ 
-    for (let i = popupGroup.children.length - 1; i >= 0; i--) {
-      const spr = popupGroup.children[i];
-      const t = (now - spr.userData.start) / spr.userData.life;
-      if (t >= 1) {
-        popupGroup.remove(spr);
-        if (spr.material?.map) spr.material.map.dispose();
-        if (spr.material) spr.material.dispose();
-        continue;
-      }
-      spr.position.y += 0.0025 * (1 + (1 - t) * 2);
-      spr.material.opacity = 1 - t;
-    }
-  }
-
-  // Init UI
+  // init UI
   renderSkillsList();
   renderSkillDetail();
-  renderInventory();
-  updateUI();
-
+  renderInvPanel();
+  updateHUD();
   requestAnimationFrame(tick);
 })();
